@@ -257,10 +257,10 @@
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,.65)';
       ctx.shadowBlur = tile * .16;
-      const gradient = ctx.createRadialGradient(cx - radius * .35, cy - radius * .38, radius * .08, cx, cy, radius);
-      gradient.addColorStop(0, '#626a72');
-      gradient.addColorStop(.20, '#252a30');
-      gradient.addColorStop(1, '#07090b');
+      const gradient = ctx.createLinearGradient(cx, cy - radius, cx, cy + radius);
+      gradient.addColorStop(0, '#171a1e');
+      gradient.addColorStop(.48, '#0c0f12');
+      gradient.addColorStop(1, '#050607');
       ctx.fillStyle = gradient;
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);

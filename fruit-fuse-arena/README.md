@@ -1,4 +1,11 @@
-## Version 2.1.0 bots, presentation, and overtime update
+## Version 2.1.1 bot control and visual polish update
+
+- Power-up drop chance increased slightly from 31% to 34%.
+- Bots now commit to grid paths instead of rapidly replanning and oscillating.
+- Bot escape planning allows them to move through their own future blast lane before the fuse expires, so they can safely place bombs.
+- Bots align to lane centers while turning, improving navigation around walls and crates.
+- Standard bombs use a matte black shell with no center highlight; mega bombs retain one subdued warning band.
+
 
 - Avatars now keep facing their last movement direction, including while idle.
 - Lobby hosts can add and remove server-authoritative bots up to the eight-player room limit.

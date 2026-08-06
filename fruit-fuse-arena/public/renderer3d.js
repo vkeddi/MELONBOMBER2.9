@@ -798,7 +798,7 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
       });
       if (item.type === 'bomb' || item.type === 'mega') {
         const scale = item.type === 'mega' ? .45 : .38;
-        draw('sphere', [x, bob, z], [scale, scale, scale], COLORS.bomb, [0, now * .0008, 0], { shine: .88 });
+        draw('sphere', [x, bob, z], [scale, scale, scale], COLORS.bomb, [0, now * .0008, 0], { shine: .04 });
         draw('cylinder', [x, bob + scale * .76, z], [.095, .13, .095], '#656d75', [0, 0, 0], { shine: .92 });
         if (item.type === 'mega') {
           draw('torus', [x, bob, z], [scale * 1.02, scale * 1.02, scale * 1.02], COLORS.megaStripe, [Math.PI / 2, 0, 0], { shine: .55 });
@@ -817,7 +817,7 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
         draw('cylinder', [x - .28, bob, z], [.20, .20, .20], '#3a424a', [0, 0, Math.PI / 2], { shine: .55 });
       } else if (item.type === 'line') {
         for (let offset = -1; offset <= 1; offset += 1) {
-          draw('sphere', [x + offset * .28, bob, z], [.20, .20, .20], COLORS.bomb, [0, 0, 0], { shine: .82 });
+          draw('sphere', [x + offset * .28, bob, z], [.20, .20, .20], COLORS.bomb, [0, 0, 0], { shine: .03 });
           draw('cylinder', [x + offset * .28, bob + .17, z], [.035, .08, .035], '#6b7177', [0, 0, 0], { shine: .8 });
         }
       } else {
@@ -839,15 +839,12 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
       const body = bomb.mega ? COLORS.mega : COLORS.bomb;
       const stripe = bomb.mega ? COLORS.megaStripe : COLORS.bombStripe;
       drawShadow(x, z, bomb.mega ? .46 : .38, .30);
-      draw('sphere', [x, .43, z], [size, size, size], body, [0, now * .00045, 0], { shine: .62 });
-      draw('torus', [x, .43, z], [size * 1.02, size * 1.02, size * 1.02], stripe, [Math.PI / 2, 0, 0], {
-        emissive: shade(stripe, -.55),
-        shine: .4,
-      });
-      draw('torus', [x, .43, z], [size * .78, size * 1.01, size * .78], stripe, [0, 0, Math.PI / 2], {
-        emissive: shade(stripe, -.55),
-        shine: .4,
-      });
+      draw('sphere', [x, .43, z], [size, size, size], body, [0, now * .00045, 0], { shine: bomb.mega ? .06 : 0 });
+      if (bomb.mega) {
+        draw('torus', [x, .43, z], [size * 1.02, size * 1.02, size * 1.02], stripe, [Math.PI / 2, 0, 0], {
+          shine: .16,
+        });
+      }
       draw('cylinder', [x + .04, .84, z - .01], [.065, .34, .065], COLORS.fuse, [0, 0, -.28]);
       draw('cylinder', [x, .78, z], [.14, .13, .14], '#626a72', [0, 0, 0], { shine: .92 });
       const sparkColor = bomb.remote ? POWER_COLORS.remote : COLORS.spark;

@@ -1164,18 +1164,17 @@ function drawBombs(layout) {
     ctx.shadowBlur = bomb.mega ? tile * .35 : tile * .17;
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    const gradient = ctx.createRadialGradient(cx - radius * .32, cy - radius * .34, radius * .1, cx, cy, radius);
-    gradient.addColorStop(0, '#747b83');
-    gradient.addColorStop(.20, bomb.mega ? '#32343a' : '#292e34');
-    gradient.addColorStop(1, '#07090b');
+    const gradient = ctx.createLinearGradient(cx, cy - radius, cx, cy + radius);
+    gradient.addColorStop(0, bomb.mega ? '#202228' : '#171a1e');
+    gradient.addColorStop(.48, bomb.mega ? '#111318' : '#0c0f12');
+    gradient.addColorStop(1, '#050607');
     ctx.fillStyle = gradient;
     ctx.fill();
-    ctx.clip();
-    ctx.strokeStyle = bomb.mega ? 'rgba(222,55,82,.72)' : 'rgba(142,151,160,.28)';
-    ctx.lineWidth = tile * .055;
-    for (let stripe = -2; stripe <= 2; stripe += 1) {
+    if (bomb.mega) {
+      ctx.strokeStyle = 'rgba(222,55,82,.78)';
+      ctx.lineWidth = tile * .06;
       ctx.beginPath();
-      ctx.arc(cx + stripe * radius * .34, cy, radius * .95, -1.4, 1.4);
+      ctx.ellipse(cx, cy, radius * .98, radius * .34, 0, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.restore();

@@ -49,6 +49,10 @@ async function run() {
       let started = false;
       let initialBotPosition = null;
       let botMoved = false;
+      let botScenarioPrepared = false;
+      let botBombSeen = false;
+      let escapeStarted = false;
+      let wrongWayFrames = 0;
       let overtimePrepared = false;
       let finished = false;
       const timeout = setTimeout(() => reject(new Error('Bot/overtime flow timed out')), 9000);
@@ -102,10 +106,25 @@ async function run() {
           fail(new Error('Bot or directional facing data was missing from the state snapshot'));
           return;
         }
-        if (!initialBotPosition) initialBotPosition = { x: bot.x, y: bot.y };
-        if (Math.hypot(bot.x - initialBotPosition.x, bot.y - initialBotPosition.y) > 0.16) botMoved = true;
+        if (!botScenarioPrepared) {
+          botScenarioPrepared = true;
+          send('action', { type: 'testPrepareBotBomb' });
+          return;
+        }
 
-        if (botMoved && !overtimePrepared) {
+        if (!initialBotPosition || Math.abs(initialBotPosition.x - 5.5) > 0.2) {
+          initialBotPosition = { x: bot.x, y: bot.y };
+        }
+        if (packet.data.bombs.some((bomb) => bomb.ownerId === botId)) botBombSeen = true;
+        if (botBombSeen && bot.moveX < -0.2) escapeStarted = true;
+        if (escapeStarted && bot.moveX > 0.2) wrongWayFrames += 1;
+        if (Math.hypot(bot.x - initialBotPosition.x, bot.y - initialBotPosition.y) > 0.55) botMoved = true;
+
+        if (botBombSeen && botMoved && !overtimePrepared) {
+          if (wrongWayFrames > 2) {
+            fail(new Error('Bot oscillated back toward its bomb instead of committing to the escape path'));
+            return;
+          }
           overtimePrepared = true;
           send('action', { type: 'testPrepareOvertimeTouch' });
           setTimeout(() => send('input', { up: false, down: false, left: false, right: true }), 100);
@@ -123,7 +142,7 @@ async function run() {
       };
       socket.onerror = fail;
     });
-    console.log('Bot/overtime test passed: host-added bot moved with facing data and touching an overtime wall was lethal.');
+    console.log('Bot/overtime test passed: bot placed a bomb, committed to a stable escape path, and overtime contact was lethal.');
   } finally {
     child.kill('SIGTERM');
   }

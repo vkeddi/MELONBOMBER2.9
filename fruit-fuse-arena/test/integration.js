@@ -42,8 +42,8 @@ async function run() {
   try {
     await waitForServer(child);
     const health = await fetch(`http://127.0.0.1:${port}/health`).then((response) => response.json());
-    if (!health.ok || health.version !== '2.1.0' || health.tickRate !== 45 || health.snapshotRate !== 30
-      || health.startingRange !== 1 || health.powerupDropChance !== 0.31 || health.kickSlideTiles !== 4
+    if (!health.ok || health.version !== '2.1.1' || health.tickRate !== 45 || health.snapshotRate !== 30
+      || health.startingRange !== 1 || health.powerupDropChance !== 0.34 || health.kickSlideTiles !== 4
       || health.cornerAssist !== 0.26 || health.roundTimerMs !== 65000
       || health.mapVoteMs !== 7000 || health.mapCount !== 3 || health.bots !== true
       || health.lethalOvertimeContact !== true) {
@@ -57,7 +57,7 @@ async function run() {
       fetch(`http://127.0.0.1:${port}/menu-demo.js`).then((response) => response.text()),
     ]);
     if (!htmlSource.includes('versionNumber') || !htmlSource.includes('/version.js')
-      || !versionSource.includes('2.1.0') || !clientSource.includes('FRUIT_FUSE_VERSION')
+      || !versionSource.includes('2.1.1') || !clientSource.includes('FRUIT_FUSE_VERSION')
       || !clientSource.includes('playExplosionSound') || !clientSource.includes('playRoundEndSound')
       || !clientSource.includes('startWinnerConfetti') || !htmlSource.includes('confettiCanvas')
       || !clientSource.includes('activateCompatibilityRenderer') || !htmlSource.includes('fallbackCanvas')

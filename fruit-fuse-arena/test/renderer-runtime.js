@@ -6,6 +6,13 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'renderer3d.js'), 'utf8');
+const clientSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'client.js'), 'utf8');
+const menuDemoSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'menu-demo.js'), 'utf8');
+
+assert.match(rendererSource, /shine: bomb\.mega \? \.06 : 0/, 'standard 3D bombs should use a matte shell');
+assert.match(rendererSource, /if \(bomb\.mega\) \{\s*draw\('torus'/, 'only mega bombs should retain a warning band');
+assert.doesNotMatch(clientSource, /gradient\.addColorStop\(0, '#747b83'\)/, 'software bombs should not have a bright center highlight');
+assert.doesNotMatch(menuDemoSource, /gradient\.addColorStop\(0, '#626a72'\)/, 'homepage bombs should not have a bright center highlight');
 
 function makeClassList() {
   const values = new Set();

@@ -23,7 +23,7 @@ const PLAYER_RADIUS = 0.28;
 const BOMB_RADIUS = 0.31;
 const KICK_SLIDE_TILES = 4;
 const KICK_SLIDE_SPEED = 7.4;
-const POWERUP_DROP_CHANCE = 0.31;
+const POWERUP_DROP_CHANCE = 0.34;
 const TEST_MODE = process.env.NODE_ENV === 'test' || process.env.FFA_TEST_MODE === '1';
 const MAX_BOMB_MOVE_SUBSTEP = 0.065;
 const MAX_MOVE_SUBSTEP = 0.065;
@@ -32,9 +32,13 @@ const CORNER_ASSIST_MAX = 0.26;
 const CORNER_ASSIST_STEP = 0.055;
 const COLORS = ['#ff5d73', '#55d6be', '#ffd166', '#7aa2ff', '#c77dff', '#ff9f1c', '#80ed99', '#f15bb5'];
 const BOT_NAMES = ['Pip', 'Mango', 'Sprout', 'Kiwi', 'Peach', 'Berry', 'Lime', 'Plum'];
-const BOT_THINK_MIN_MS = 120;
-const BOT_THINK_MAX_MS = 230;
-const BOT_BOMB_COOLDOWN_MS = 1450;
+const BOT_THINK_MIN_MS = 360;
+const BOT_THINK_MAX_MS = 560;
+const BOT_BOMB_COOLDOWN_MS = 1350;
+const BOT_PATH_CENTER_TOLERANCE = 0.12;
+const BOT_LANE_TOLERANCE = 0.055;
+const BOT_STUCK_MS = 900;
+const BOT_MAX_ESCAPE_STEPS = 6;
 const MAPS = [
   { id: 'classic', name: 'Classic Grove', description: 'Balanced checkerboard pillars and familiar lanes.' },
   { id: 'crossroads', name: 'Crossroads', description: 'A broad central cross creates faster encounters.' },
@@ -421,7 +425,11 @@ function createGame(room, mapId = room.selectedMapId || 'classic') {
       botNextBombAt: now + 900 + Math.random() * 1300,
       botPath: [],
       botEscapeUntil: 0,
+      botMode: 'seek',
+      botWaitForOwnBomb: false,
       botLastTile: `${x},${y}`,
+      botLastProgressX: x + 0.5,
+      botLastProgressY: y + 0.5,
       botStuckSince: now,
     };
     room.inputs.set(p.id, { up: false, down: false, left: false, right: false });
@@ -818,26 +826,35 @@ function botThreatensTarget(game, player) {
 function botEscapePathForNewBomb(game, player, danger) {
   const tx = Math.floor(player.x);
   const ty = Math.floor(player.y);
-  const planned = new Set(danger);
-  addBombDanger(game, planned, {
+  const ownBlast = new Set();
+  addBombDanger(game, ownBlast, {
     tx,
     ty,
     range: player.range,
     piercing: player.piercing,
   });
-  return searchBotPath(
+  const unsafeDestination = new Set([...danger, ...ownBlast]);
+  const path = searchBotPath(
     game,
     player,
-    (x, y) => !planned.has(powerupKey(x, y)),
-    planned,
+    (x, y) => !unsafeDestination.has(powerupKey(x, y)),
+    danger,
     { allowStartBomb: true },
   );
+  if (path.length <= 1 || path.length - 1 > BOT_MAX_ESCAPE_STEPS) return [];
+  return path;
 }
 
 function chooseBotPath(game, player, danger) {
   const currentKey = powerupKey(Math.floor(player.x), Math.floor(player.y));
-  if (danger.has(currentKey) || player.botEscapeUntil > Date.now()) {
-    return searchBotPath(game, player, (x, y) => !danger.has(powerupKey(x, y)), danger, { allowStartBomb: true });
+  if (danger.has(currentKey)) {
+    return searchBotPath(
+      game,
+      player,
+      (x, y) => !danger.has(powerupKey(x, y)),
+      danger,
+      { allowStartBomb: true, allowDanger: true },
+    );
   }
 
   const powerupTiles = new Set(Object.values(game.powerups).map((item) => powerupKey(item.x, item.y)));
@@ -865,20 +882,57 @@ function chooseBotPath(game, player, danger) {
   return searchBotPath(game, player, (x, y) => powerupKey(x, y) === target, danger);
 }
 
-function botInputTowardPath(player) {
+function trimBotPath(player) {
   while (player.botPath.length > 1) {
     const [targetX, targetY] = player.botPath[1];
-    if (Math.hypot(player.x - (targetX + 0.5), player.y - (targetY + 0.5)) > 0.15) break;
+    const distance = Math.hypot(player.x - (targetX + 0.5), player.y - (targetY + 0.5));
+    if (distance > BOT_PATH_CENTER_TOLERANCE) break;
     player.botPath.shift();
   }
+}
+
+function botPathBlocked(game, player, danger, allowDanger = false) {
+  trimBotPath(player);
   const target = player.botPath[1];
-  if (!target) return { up: false, down: false, left: false, right: false };
-  const dx = target[0] + 0.5 - player.x;
-  const dy = target[1] + 0.5 - player.y;
-  if (Math.abs(dx) > Math.abs(dy)) {
-    return { up: false, down: false, left: dx < 0, right: dx > 0 };
+  if (!target) return false;
+  if (!botTileOpen(game, target[0], target[1], player.id)) return true;
+  return !allowDanger && danger.has(powerupKey(target[0], target[1]));
+}
+
+function botInputTowardPath(player) {
+  trimBotPath(player);
+  const target = player.botPath[1];
+  const source = player.botPath[0];
+  if (!target || !source) return { up: false, down: false, left: false, right: false };
+
+  const segmentX = Math.sign(target[0] - source[0]);
+  const segmentY = Math.sign(target[1] - source[1]);
+  if (segmentX !== 0) {
+    const laneY = source[1] + 0.5;
+    const laneOffset = laneY - player.y;
+    if (Math.abs(laneOffset) > BOT_LANE_TOLERANCE) {
+      return { up: laneOffset < 0, down: laneOffset > 0, left: false, right: false };
+    }
+    const remaining = target[0] + 0.5 - player.x;
+    return { up: false, down: false, left: remaining < -0.025, right: remaining > 0.025 };
   }
-  return { up: dy < 0, down: dy > 0, left: false, right: false };
+
+  const laneX = source[0] + 0.5;
+  const laneOffset = laneX - player.x;
+  if (Math.abs(laneOffset) > BOT_LANE_TOLERANCE) {
+    return { up: false, down: false, left: laneOffset < 0, right: laneOffset > 0 };
+  }
+  const remaining = target[1] + 0.5 - player.y;
+  return { up: remaining < -0.025, down: remaining > 0.025, left: false, right: false };
+}
+
+function updateBotProgress(player, now) {
+  const moved = Math.hypot(player.x - player.botLastProgressX, player.y - player.botLastProgressY);
+  if (moved >= 0.055) {
+    player.botLastProgressX = player.x;
+    player.botLastProgressY = player.y;
+    player.botStuckSince = now;
+  }
 }
 
 function updateBotControllers(room, now) {
@@ -886,33 +940,96 @@ function updateBotControllers(room, now) {
   const danger = botDangerTiles(game, now);
   for (const player of Object.values(game.players)) {
     if (!player.isBot || !player.alive) continue;
+
+    updateBotProgress(player, now);
+    trimBotPath(player);
     const tileKey = powerupKey(Math.floor(player.x), Math.floor(player.y));
-    if (tileKey !== player.botLastTile) {
-      player.botLastTile = tileKey;
-      player.botStuckSince = now;
+    const centered = Math.hypot(
+      player.x - (Math.floor(player.x) + 0.5),
+      player.y - (Math.floor(player.y) + 0.5),
+    ) <= 0.18;
+    const stuck = now - player.botStuckSince > BOT_STUCK_MS;
+
+    if (player.botMode === 'escape') {
+      const reachedSafety = !danger.has(tileKey) && player.botPath.length <= 1;
+      const ownBombActive = player.botWaitForOwnBomb
+        && Object.values(game.bombs).some((bomb) => bomb.ownerId === player.id && !bomb.exploded);
+      if (reachedSafety && ownBombActive) {
+        // Once safe, wait for the bomb to resolve instead of immediately choosing
+        // a new target and running back into the same blast lane.
+        player.botPath = [[Math.floor(player.x), Math.floor(player.y)]];
+        player.botStuckSince = now;
+        player.botLastProgressX = player.x;
+        player.botLastProgressY = player.y;
+      } else if (reachedSafety || (now >= player.botEscapeUntil && !danger.has(tileKey) && !ownBombActive)) {
+        player.botMode = 'seek';
+        player.botWaitForOwnBomb = false;
+        player.botPath = [];
+      } else if (!player.botPath.length || botPathBlocked(game, player, danger, true) || stuck) {
+        player.botPath = searchBotPath(
+          game,
+          player,
+          (x, y) => !danger.has(powerupKey(x, y)),
+          danger,
+          { allowStartBomb: true, allowDanger: true },
+        );
+        player.botStuckSince = now;
+        player.botLastProgressX = player.x;
+        player.botLastProgressY = player.y;
+      }
     }
 
-    if (now >= player.botNextThinkAt || !player.botPath.length || now - player.botStuckSince > 1100) {
-      const canBomb = now >= player.botNextBombAt
-        && player.bombsPlaced < player.maxBombs
-        && !bombAt(game, Math.floor(player.x), Math.floor(player.y))
-        && !danger.has(tileKey)
-        && botThreatensTarget(game, player);
-      if (canBomb) {
-        const escapePath = botEscapePathForNewBomb(game, player, danger);
-        if (escapePath.length > 1) {
-          placeBomb(room, player.id, 'normal');
-          player.botPath = escapePath;
-          player.botEscapeUntil = now + BOMB_FUSE_MS + 250;
-          player.botNextBombAt = now + BOT_BOMB_COOLDOWN_MS + Math.random() * 900;
+    if (player.botMode !== 'escape') {
+      const currentDanger = danger.has(tileKey);
+      const needsPath = player.botPath.length <= 1
+        || botPathBlocked(game, player, danger)
+        || stuck;
+
+      if (currentDanger) {
+        player.botMode = 'escape';
+        player.botPath = searchBotPath(
+          game,
+          player,
+          (x, y) => !danger.has(powerupKey(x, y)),
+          danger,
+          { allowStartBomb: true, allowDanger: true },
+        );
+        player.botEscapeUntil = now + BOMB_FUSE_MS;
+      } else if (needsPath) {
+        const tileHasBomb = Boolean(bombAt(game, Math.floor(player.x), Math.floor(player.y)));
+        const tacticalHere = centered && botThreatensTarget(game, player);
+        const hasBombSlot = player.bombsPlaced < player.maxBombs && !tileHasBomb;
+        const waitingForCooldown = tacticalHere && hasBombSlot && now < player.botNextBombAt;
+        const canBomb = tacticalHere && hasBombSlot && now >= player.botNextBombAt;
+        if (waitingForCooldown) {
+          // Hold a useful bombing position instead of selecting another target and
+          // bouncing back and forth while the short cooldown finishes.
+          player.botPath = [[Math.floor(player.x), Math.floor(player.y)]];
+        } else if (canBomb) {
+          const escapePath = botEscapePathForNewBomb(game, player, danger);
+          if (escapePath.length > 1 && placeBomb(room, player.id, 'normal')) {
+            player.botMode = 'escape';
+            player.botWaitForOwnBomb = true;
+            player.botPath = escapePath;
+            player.botEscapeUntil = now + BOMB_FUSE_MS + 300;
+            player.botNextBombAt = now + BOT_BOMB_COOLDOWN_MS + Math.random() * 850;
+          } else {
+            player.botPath = chooseBotPath(game, player, danger);
+          }
         } else {
           player.botPath = chooseBotPath(game, player, danger);
         }
-      } else {
-        player.botPath = chooseBotPath(game, player, danger);
+        player.botNextThinkAt = now + BOT_THINK_MIN_MS + Math.random() * (BOT_THINK_MAX_MS - BOT_THINK_MIN_MS);
+        player.botStuckSince = now;
+        player.botLastProgressX = player.x;
+        player.botLastProgressY = player.y;
+      } else if (now >= player.botNextThinkAt) {
+        // Keep an active route instead of replacing it every few frames. Rapid
+        // replanning was the source of bots vibrating between opposite inputs.
+        player.botNextThinkAt = now + BOT_THINK_MIN_MS + Math.random() * (BOT_THINK_MAX_MS - BOT_THINK_MIN_MS);
       }
-      player.botNextThinkAt = now + BOT_THINK_MIN_MS + Math.random() * (BOT_THINK_MAX_MS - BOT_THINK_MIN_MS);
     }
+
     room.inputs.set(player.id, botInputTowardPath(player));
   }
 }
@@ -970,28 +1087,29 @@ function placeSingleBomb(room, player, tx, ty, options = {}) {
 }
 
 function placeBomb(room, playerId, mode = 'normal') {
-  if (room.phase !== 'playing' || room.game?.phase !== 'playing') return;
+  if (room.phase !== 'playing' || room.game?.phase !== 'playing') return false;
   const player = room.game.players[playerId];
-  if (!player?.alive) return;
+  if (!player?.alive) return false;
   const tx = Math.floor(player.x);
   const ty = Math.floor(player.y);
 
-  if (mode === 'mega' && player.megaCharges <= 0) return;
+  if (mode === 'mega' && player.megaCharges <= 0) return false;
 
   if (mode === 'line' && player.line) {
     let x = tx;
     let y = ty;
+    let placed = false;
     const fx = player.facingX || 0;
     const fy = player.facingY || 1;
     while (player.bombsPlaced < player.maxBombs) {
       if (getCell(room.game, x, y) !== 0 || bombAt(room.game, x, y)) break;
-      placeSingleBomb(room, player, x, y, { mega: false });
+      placed = placeSingleBomb(room, player, x, y, { mega: false }) || placed;
       x += fx;
       y += fy;
     }
-  } else {
-    placeSingleBomb(room, player, tx, ty, { mega: mode === 'mega' });
+    return placed;
   }
+  return placeSingleBomb(room, player, tx, ty, { mega: mode === 'mega' });
 }
 
 function detonateRemote(room, playerId) {
@@ -1513,6 +1631,41 @@ function handleClientEvent(socket, event, data) {
       player.moveY = 0;
       for (let x = 4; x <= 8; x += 1) setCell(room.game, x, 5, 0);
       for (let y = 4; y <= 8; y += 1) setCell(room.game, 5, y, 0);
+      return;
+    }
+    if (TEST_MODE && data.type === 'testPrepareBotBomb') {
+      const human = room.game?.players[socket.id];
+      const bot = Object.values(room.game?.players || {}).find((candidate) => candidate.isBot && candidate.alive);
+      if (!human?.alive || !bot) return;
+      room.game.bombs = {};
+      room.game.flames = [];
+      room.game.powerups = {};
+      human.x = 10.5;
+      human.y = 9.5;
+      human.moveX = 0;
+      human.moveY = 0;
+      bot.x = 5.5;
+      bot.y = 5.5;
+      bot.moveX = 0;
+      bot.moveY = 0;
+      bot.facingX = -1;
+      bot.facingY = 0;
+      bot.maxBombs = 1;
+      bot.bombsPlaced = 0;
+      bot.range = 1;
+      bot.botMode = 'seek';
+      bot.botWaitForOwnBomb = false;
+      bot.botPath = [];
+      bot.botNextBombAt = 0;
+      bot.botNextThinkAt = 0;
+      bot.botEscapeUntil = 0;
+      bot.botLastProgressX = bot.x;
+      bot.botLastProgressY = bot.y;
+      bot.botStuckSince = now;
+      for (let y = 3; y <= 7; y += 1) {
+        for (let x = 3; x <= 7; x += 1) setCell(room.game, x, y, 0);
+      }
+      setCell(room.game, 6, 5, 2);
       return;
     }
     if (TEST_MODE && data.type === 'testPrepareOvertimeTouch') {
