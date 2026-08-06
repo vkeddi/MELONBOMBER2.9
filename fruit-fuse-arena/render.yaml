@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: fruit-fuse-arena
+    runtime: node
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health

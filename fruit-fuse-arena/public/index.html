@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#101426" />
+  <title>Fruit Fuse Arena</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main id="app">
+    <section id="menuScreen" class="screen active">
+      <div class="menu-shell">
+        <div class="brand-card">
+          <div class="brand-fruit" aria-hidden="true"><span></span></div>
+          <p class="eyebrow">ONLINE PARTY BRAWLER</p>
+          <h1>Fruit Fuse<br><span>Arena</span></h1>
+          <p class="tagline">Trap rivals, chain explosions, steal upgrades, and survive the closing arena.</p>
+        </div>
+
+        <div class="panel menu-panel">
+          <label for="nameInput">Display name</label>
+          <input id="nameInput" maxlength="16" autocomplete="nickname" placeholder="Player name" />
+          <button id="createButton" class="primary">Create room</button>
+          <div class="divider"><span>or join a friend</span></div>
+          <div class="join-row">
+            <input id="codeInput" maxlength="5" autocomplete="off" spellcheck="false" placeholder="ROOM CODE" />
+            <button id="joinButton">Join</button>
+          </div>
+          <p id="menuNotice" class="notice" role="status"></p>
+        </div>
+      </div>
+    </section>
+
+    <section id="lobbyScreen" class="screen">
+      <div class="lobby-shell">
+        <header class="topbar panel">
+          <div>
+            <p class="eyebrow">PRIVATE ROOM</p>
+            <h2>Code <button id="copyCode" class="code-button" title="Copy room code">-----</button></h2>
+            <button id="copyInvite" class="invite-button" title="Copy a direct room link">Copy invite link</button>
+          </div>
+          <button id="leaveLobby" class="ghost danger">Leave</button>
+        </header>
+
+        <div class="lobby-grid">
+          <div class="panel roster-panel">
+            <div class="panel-title">
+              <h3>Players</h3>
+              <span id="playerCount">0 / 8</span>
+            </div>
+            <div id="playerList" class="player-list"></div>
+          </div>
+
+          <div class="panel rules-panel">
+            <h3>How it works</h3>
+            <div class="rule"><kbd>WASD</kbd><span>Move</span></div>
+            <div class="rule"><kbd>Space</kbd><span>Place bomb</span></div>
+            <div class="rule"><kbd>F</kbd><span>Use mega bomb charge</span></div>
+            <div class="rule"><kbd>E</kbd><span>Place line of bombs</span></div>
+            <div class="rule"><kbd>Q</kbd><span>Remote detonate</span></div>
+            <p>Bomb kick is passive: walk into a bomb after collecting the boot upgrade. Kicked bombs slide up to four tiles or stop at the first obstacle.</p>
+            <button id="startButton" class="primary hidden">Start match</button>
+            <p id="waitingText" class="waiting">Waiting for the host…</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="gameScreen" class="screen game-screen">
+      <canvas id="gameCanvas" width="1200" height="860" aria-label="Fruit Fuse Arena game"></canvas>
+
+      <div class="game-ui">
+        <div class="hud-top">
+          <div class="hud-card room-hud">
+            <span>ROOM</span><strong id="hudRoom">-----</strong>
+          </div>
+          <div class="hud-card round-hud">
+            <span>ROUND</span><strong id="hudRound">1</strong>
+          </div>
+          <div class="hud-card danger-hud">
+            <span>ARENA CLOSES</span><strong id="hudTimer">1:30</strong>
+          </div>
+          <button id="leaveGame" class="hud-card leave-game" title="Leave game">×</button>
+        </div>
+
+        <div id="scoreboard" class="scoreboard"></div>
+        <div id="powerHud" class="power-hud"></div>
+        <div id="toastStack" class="toast-stack"></div>
+        <div id="roundBanner" class="round-banner hidden"></div>
+
+        <div class="controls-hint">
+          <span><kbd>WASD</kbd> Move</span>
+          <span><kbd>Space</kbd> Bomb</span>
+          <span><kbd>F</kbd> Mega</span>
+          <span><kbd>E</kbd> Line</span>
+          <span><kbd>Q</kbd> Remote</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/client.js"></script>
+</body>
+</html>
