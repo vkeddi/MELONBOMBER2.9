@@ -72,7 +72,7 @@ const hudTimer = document.getElementById('hudTimer');
 const toastStack = document.getElementById('toastStack');
 const roundBanner = document.getElementById('roundBanner');
 const canvas = document.getElementById('gameCanvas');
-const ctx = canvas.getContext('2d');
+const ctx = null; // The game world is rendered by renderer3d.js using WebGL.
 const confettiCanvas = document.getElementById('confettiCanvas');
 const confettiCtx = confettiCanvas.getContext('2d');
 
@@ -341,6 +341,7 @@ function leaveRoom() {
   displayPlayers.clear();
   displayBombs.clear();
   pendingBombAnchors = [];
+  window.FFA3D?.reset();
   mapVoteOverlay.classList.add('hidden');
   releaseInputs();
   const cleanUrl = new URL(location.href);
@@ -382,6 +383,7 @@ socket.on('mapVoteStarted', () => {
 });
 
 socket.on('gameStarted', ({ round, mapName }) => {
+  window.FFA3D?.resetRound();
   showScreen('game');
   mapVoteOverlay.classList.add('hidden');
   roundBanner.classList.add('hidden');
@@ -591,9 +593,13 @@ function processEvents(events) {
       const info = POWER_INFO[event.powerup];
       showToast(`${info?.icon || ''} ${info?.label || event.powerup} acquired`, info?.color || '#b7ef4a');
     }
-    if (event.type === 'explosion') playExplosionSound(Boolean(event.mega));
+    if (event.type === 'explosion') {
+      playExplosionSound(Boolean(event.mega));
+      window.FFA3D?.triggerExplosion(event);
+    }
     if (event.type === 'death') {
       shake = Math.max(shake, 6);
+      window.FFA3D?.triggerDeath(event);
       if (event.playerId === socket.id) {
         showToast('You were blasted — movement resumes next round', '#ff8da0');
         roundBanner.innerHTML = '<strong>ELIMINATED</strong><span>Spectating until the next round…</span>';
@@ -620,18 +626,12 @@ function escapeHtml(value) {
 }
 
 function resizeCanvas() {
-  // A modest DPR cap preserves sharpness while avoiding expensive 4K/retina
-  // canvas fills that can cut the frame rate in half.
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.4);
+  // The WebGL renderer caps resolution internally to keep the 3D view smooth on
+  // high-DPI displays while retaining crisp geometry and HUD elements.
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
   const width = window.innerWidth;
   const height = window.innerHeight;
-  if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
-    canvas.width = Math.floor(width * dpr);
-    canvas.height = Math.floor(height * dpr);
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-  }
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  window.FFA3D?.resize(width, height, dpr);
   return { width, height, dpr };
 }
 window.addEventListener('resize', () => {
@@ -1231,10 +1231,10 @@ function drawFrame(now) {
   lastFrame = now;
   animationTime = now;
   updateMapVoteCountdown();
-  const view = resizeCanvas();
+  resizeCanvas();
   updateDisplayPlayers(dt);
   updateDisplayBombs(dt);
-  drawBackground(view.width, view.height);
+  window.__ffaSocketId = socket.id;
 
   if (state && screens.game.classList.contains('active') && now - lastHudRender >= 100) {
     renderHud();
@@ -1242,19 +1242,17 @@ function drawFrame(now) {
     lastHudRender = now;
   }
 
-  if (state && screens.game.classList.contains('active')) {
-    const layout = boardLayout(view.width, view.height);
-    ctx.save();
-    if (shake > .05) {
-      ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake);
-      shake *= .88;
-    }
-    drawBoard(layout);
-    drawPowerups(layout);
-    drawBombs(layout);
-    drawFlames(layout);
-    drawPlayers(layout);
-    ctx.restore();
+  if (screens.game.classList.contains('active')) {
+    window.FFA3D?.render({
+      state,
+      displayPlayers,
+      displayBombs,
+      serverNow: estimatedServerNow(),
+      animationTime: now,
+      shake,
+    });
+    if (shake > .05) shake *= .86;
+    else shake = 0;
   }
   requestAnimationFrame(drawFrame);
 }

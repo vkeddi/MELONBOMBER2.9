@@ -1,4 +1,19 @@
-# Fruit Fuse Arena
+
+## Version 2.0 graphics overhaul
+
+The game now uses a locally bundled, dependency-free WebGL renderer with a fixed overhead 3D camera. The arena, walls, crates, players, bombs, powerups, flames, shockwaves, and surrounding orchard scenery are rendered as lit 3D geometry. Multiplayer rules and server-authoritative collision remain unchanged.
+
+Highlights:
+
+- True perspective 3D overhead battlefield
+- Low-poly fruit characters with animated movement
+- Lit stone walls, wooden crates, glowing pickups, and modeled bombs
+- Explosion shockwaves, debris particles, flame volumes, and death effects
+- Redesigned game HUD and in-world player labels
+- Procedural visuals with no external image or model downloads
+- Automatic resolution scaling for smoother performance on high-DPI screens
+
+# Fruit Fuse Arena 3D
 
 A standalone, original browser game inspired by classic grid-based bomb arena party games. It does **not** require Garry's Mod and does not include Garry's Mod code, models, textures, maps, or sounds.
 

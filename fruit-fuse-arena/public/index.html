@@ -13,9 +13,9 @@
       <div class="menu-shell">
         <div class="brand-card">
           <div class="brand-fruit" aria-hidden="true"><span></span></div>
-          <p class="eyebrow">ONLINE PARTY BRAWLER</p>
+          <p class="eyebrow">ONLINE 3D PARTY BRAWLER</p>
           <h1>Fruit Fuse<br><span>Arena</span></h1>
-          <p class="tagline">Trap rivals, chain explosions, steal upgrades, and survive the closing arena.</p>
+          <p class="tagline">A fully 3D overhead arena. Trap rivals, chain explosions, steal upgrades, and survive the closing battlefield.</p>
         </div>
 
         <div class="panel menu-panel">
@@ -79,7 +79,9 @@
     </section>
 
     <section id="gameScreen" class="screen game-screen">
-      <canvas id="gameCanvas" width="1200" height="860" aria-label="Fruit Fuse Arena game"></canvas>
+      <canvas id="gameCanvas" width="1200" height="860" aria-label="Fruit Fuse Arena 3D game world"></canvas>
+      <div id="worldLabels" class="world-labels" aria-hidden="true"></div>
+      <div id="renderNotice" class="render-notice hidden" role="alert"></div>
       <canvas id="confettiCanvas" class="confetti-canvas" aria-hidden="true"></canvas>
 
       <div class="game-ui">
@@ -120,6 +122,7 @@
     </section>
   </main>
 
+  <script src="/renderer3d.js"></script>
   <script src="/client.js"></script>
 </body>
 </html>
