@@ -48,6 +48,14 @@ async function run() {
       || health.mapVoteMs !== 7000 || health.mapCount !== 3) {
       throw new Error('Health check or gameplay configuration failed');
     }
+    const [clientSource, htmlSource] = await Promise.all([
+      fetch(`http://127.0.0.1:${port}/client.js`).then((response) => response.text()),
+      fetch(`http://127.0.0.1:${port}/`).then((response) => response.text()),
+    ]);
+    if (!clientSource.includes('playExplosionSound') || !clientSource.includes('playRoundEndSound')
+      || !clientSource.includes('startWinnerConfetti') || !htmlSource.includes('confettiCanvas')) {
+      throw new Error('Audio or winner-confetti client features were not packaged');
+    }
 
     await new Promise((resolve, reject) => {
       const alpha = new WebSocket(`ws://127.0.0.1:${port}/ws`);
@@ -58,6 +66,7 @@ async function run() {
       let started = false;
       let alphaInitialVoteSent = false;
       let betaInitialVoteSent = false;
+      let mapPreviewChecked = false;
       let rangeUpgradeRequested = false;
       let rangeUpgradeConfirmed = false;
       let rangeUpgradeConfirmedAt = 0;
@@ -70,6 +79,8 @@ async function run() {
       let bombSeen = false;
       let bombSpawnMetadataChecked = false;
       let bombExpired = false;
+      let explosionEventSeen = false;
+      let roundOverChecked = false;
       let maxBetaX = 0;
       let maxBetaY = 0;
       let kickPrepared = false;
@@ -116,6 +127,16 @@ async function run() {
         }
         if (packet.event === 'lobby') {
           if (!code) code = packet.data.code;
+          if (!mapPreviewChecked && Array.isArray(packet.data.maps) && packet.data.maps.length === 3) {
+            const validPreviews = packet.data.maps.every((map) => map.preview?.cols === 15
+              && map.preview?.rows === 13 && Array.isArray(map.preview?.walls)
+              && map.preview.walls.length === 13 && Array.isArray(map.preview?.spawns));
+            if (!validPreviews) {
+              fail(new Error('Map vote previews did not contain the 15x13 wall layouts'));
+              return;
+            }
+            mapPreviewChecked = true;
+          }
           if (packet.data.phase === 'lobby' && packet.data.players.length === 2 && !alphaInitialVoteSent) {
             alphaInitialVoteSent = true;
             send(alpha, 'voteMap', { mapId: 'crossroads' });
@@ -130,12 +151,20 @@ async function run() {
             send(alpha, 'voteMap', { mapId: 'orchard' });
           }
         }
+        if (packet.event === 'roundOver') {
+          if (packet.data.winnerId !== alphaId || packet.data.winnerName !== 'Alpha') {
+            fail(new Error('Round-end winner payload was incorrect'));
+            return;
+          }
+          roundOverChecked = true;
+          return;
+        }
         if (packet.event !== 'state') return;
 
         const snapshot = packet.data;
-        if (snapshot.players.length !== 2 || snapshot.grid.length !== 255
-          || snapshot.cols !== 17 || snapshot.rows !== 15) {
-          fail(new Error('Invalid larger authoritative state shape'));
+        if (snapshot.players.length !== 2 || snapshot.grid.length !== 195
+          || snapshot.cols !== 15 || snapshot.rows !== 13) {
+          fail(new Error('Invalid restored authoritative state shape'));
           return;
         }
         if (snapshot.suddenDeathIn > 65050 || snapshot.suddenDeathIn < 0) {
@@ -153,6 +182,10 @@ async function run() {
             }
             if (!Number.isFinite(alphaPlayer.latencyMs) || !Number.isFinite(betaPlayer.latencyMs)) {
               fail(new Error('Per-player latency values were not measured'));
+              return;
+            }
+            if (!mapPreviewChecked || !explosionEventSeen || !roundOverChecked) {
+              fail(new Error('Map previews, explosion events, or round-end winner event were not observed'));
               return;
             }
             finish();
@@ -221,13 +254,15 @@ async function run() {
           bombSpawnMetadataChecked = true;
         }
         bombSeen ||= snapshot.bombs.length > 0;
+        explosionEventSeen ||= (snapshot.events || []).some((event) => event.type === 'explosion'
+          && Number.isFinite(event.x) && Number.isFinite(event.y) && event.bombId);
         if (bombSeen && snapshot.bombs.length === 0) bombExpired = true;
         maxBetaX = Math.max(maxBetaX, betaPlayer.x);
         maxBetaY = Math.max(maxBetaY, betaPlayer.y);
 
         // Beta begins at the bottom-right spawn. Its circle must never enter the
-        // permanent border walls at x=16 or y=14.
-        if (betaPlayer.x > 15.715 || betaPlayer.y > 13.715) {
+        // permanent border walls at x=14 or y=12.
+        if (betaPlayer.x > 13.725 || betaPlayer.y > 11.725) {
           fail(new Error(`Wall collision failed at ${betaPlayer.x.toFixed(3)}, ${betaPlayer.y.toFixed(3)}`));
           return;
         }
@@ -357,7 +392,7 @@ async function run() {
       beta.onerror = fail;
     });
 
-    console.log('Integration test passed: larger voted maps, personal +1 blast pickups, 65-second rounds, latency, centered bombs, multiplayer sync, escape lanes, collisions, kicking, corner assistance, and rapid turns.');
+    console.log('Integration test passed: restored 15x13 voted maps with previews, personal +1 blast pickups, explosion events, round-end winner payload, 65-second rounds, latency, centered bombs, multiplayer sync, escape lanes, collisions, kicking, corner assistance, and rapid turns.');
   } finally {
     child.kill('SIGTERM');
   }

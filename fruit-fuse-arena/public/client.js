@@ -73,6 +73,8 @@ const toastStack = document.getElementById('toastStack');
 const roundBanner = document.getElementById('roundBanner');
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
+const confettiCanvas = document.getElementById('confettiCanvas');
+const confettiCtx = confettiCanvas.getContext('2d');
 
 nameInput.value = localStorage.getItem('ffa-name') || '';
 const inviteCode = (new URLSearchParams(location.search).get('room') || '')
@@ -109,6 +111,135 @@ const LOCAL_PREDICTION_LEAD = 0.22;
 const BOMB_SPAWN_SETTLE_MS = 180;
 const backgroundLayer = { canvas: document.createElement('canvas'), key: '' };
 const boardLayer = { canvas: document.createElement('canvas'), key: '', margin: 56 };
+let audioContext = null;
+let confettiParticles = [];
+let confettiAnimation = 0;
+
+function unlockAudio() {
+  if (!audioContext) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) audioContext = new AudioContextClass();
+  }
+  if (audioContext?.state === 'suspended') audioContext.resume().catch(() => {});
+}
+
+window.addEventListener('pointerdown', unlockAudio, { capture: true });
+window.addEventListener('keydown', unlockAudio, { capture: true });
+
+function playExplosionSound(mega = false) {
+  unlockAudio();
+  if (!audioContext || audioContext.state !== 'running') return;
+  const now = audioContext.currentTime;
+  const duration = mega ? 0.16 : 0.11;
+
+  const oscillator = audioContext.createOscillator();
+  const oscillatorGain = audioContext.createGain();
+  oscillator.type = 'sine';
+  oscillator.frequency.setValueAtTime(mega ? 105 : 125, now);
+  oscillator.frequency.exponentialRampToValueAtTime(mega ? 42 : 58, now + duration);
+  oscillatorGain.gain.setValueAtTime(mega ? 0.035 : 0.022, now);
+  oscillatorGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+  oscillator.connect(oscillatorGain).connect(audioContext.destination);
+  oscillator.start(now);
+  oscillator.stop(now + duration);
+
+  const noiseLength = Math.max(1, Math.floor(audioContext.sampleRate * duration));
+  const noiseBuffer = audioContext.createBuffer(1, noiseLength, audioContext.sampleRate);
+  const noiseData = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < noiseLength; i += 1) noiseData[i] = (Math.random() * 2 - 1) * (1 - i / noiseLength);
+  const noise = audioContext.createBufferSource();
+  const filter = audioContext.createBiquadFilter();
+  const noiseGain = audioContext.createGain();
+  noise.buffer = noiseBuffer;
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(mega ? 720 : 560, now);
+  noiseGain.gain.setValueAtTime(mega ? 0.025 : 0.014, now);
+  noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+  noise.connect(filter).connect(noiseGain).connect(audioContext.destination);
+  noise.start(now);
+}
+
+function playRoundEndSound(won) {
+  unlockAudio();
+  if (!audioContext || audioContext.state !== 'running') return;
+  const now = audioContext.currentTime;
+  const notes = won ? [523.25, 659.25, 783.99] : [392, 329.63, 261.63];
+  notes.forEach((frequency, index) => {
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    const startsAt = now + index * 0.085;
+    oscillator.type = won ? 'triangle' : 'sine';
+    oscillator.frequency.setValueAtTime(frequency, startsAt);
+    gain.gain.setValueAtTime(0.0001, startsAt);
+    gain.gain.exponentialRampToValueAtTime(won ? 0.045 : 0.03, startsAt + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startsAt + 0.19);
+    oscillator.connect(gain).connect(audioContext.destination);
+    oscillator.start(startsAt);
+    oscillator.stop(startsAt + 0.2);
+  });
+}
+
+function resizeConfettiCanvas() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  confettiCanvas.width = Math.floor(width * dpr);
+  confettiCanvas.height = Math.floor(height * dpr);
+  confettiCanvas.style.width = `${width}px`;
+  confettiCanvas.style.height = `${height}px`;
+  confettiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function startWinnerConfetti() {
+  resizeConfettiCanvas();
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  const me = state?.players?.find((player) => player.id === socket.id);
+  const colors = [me?.color || '#b7ef4a', '#ffd166', '#ff5d73', '#55d6be', '#7aa2ff', '#f6f7fb'];
+  confettiParticles = Array.from({ length: 150 }, (_, index) => ({
+    x: Math.random() * width,
+    y: -20 - Math.random() * height * 0.45,
+    vx: (Math.random() - 0.5) * 150,
+    vy: 150 + Math.random() * 220,
+    gravity: 180 + Math.random() * 120,
+    rotation: Math.random() * Math.PI * 2,
+    rotationSpeed: (Math.random() - 0.5) * 10,
+    width: 5 + Math.random() * 7,
+    height: 3 + Math.random() * 5,
+    color: colors[index % colors.length],
+    life: 2.5 + Math.random() * 1.2,
+  }));
+  if (!confettiAnimation) {
+    let previous = performance.now();
+    const animate = (now) => {
+      const dt = Math.min(0.035, (now - previous) / 1000);
+      previous = now;
+      confettiCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+      confettiParticles = confettiParticles.filter((particle) => {
+        particle.life -= dt;
+        if (particle.life <= 0 || particle.y > window.innerHeight + 30) return false;
+        particle.vy += particle.gravity * dt;
+        particle.x += particle.vx * dt;
+        particle.y += particle.vy * dt;
+        particle.rotation += particle.rotationSpeed * dt;
+        confettiCtx.save();
+        confettiCtx.translate(particle.x, particle.y);
+        confettiCtx.rotate(particle.rotation);
+        confettiCtx.globalAlpha = Math.min(1, particle.life * 1.5);
+        confettiCtx.fillStyle = particle.color;
+        confettiCtx.fillRect(-particle.width / 2, -particle.height / 2, particle.width, particle.height);
+        confettiCtx.restore();
+        return true;
+      });
+      if (confettiParticles.length) confettiAnimation = requestAnimationFrame(animate);
+      else {
+        confettiAnimation = 0;
+        confettiCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+      }
+    };
+    confettiAnimation = requestAnimationFrame(animate);
+  }
+}
 
 const input = { up: false, down: false, left: false, right: false };
 const keyMap = {
@@ -268,8 +399,11 @@ socket.on('state', (nextState) => {
   if (!screens.game.classList.contains('active')) showScreen('game');
 });
 
-socket.on('roundOver', ({ winnerName }) => {
+socket.on('roundOver', ({ winnerId, winnerName }) => {
   const title = winnerName ? `${winnerName} wins!` : 'Nobody survived';
+  const won = Boolean(winnerId && winnerId === socket.id);
+  playRoundEndSound(won);
+  if (won) startWinnerConfetti();
   roundBanner.innerHTML = `<strong>${escapeHtml(title)}</strong><span>Map vote starting…</span>`;
   roundBanner.classList.remove('hidden');
 });
@@ -284,12 +418,35 @@ function latencyLabel(value) {
   return Number.isFinite(value) ? `${Math.round(value)}ms` : '—ms';
 }
 
+function mapPreviewMarkup(map) {
+  const preview = map.preview;
+  if (!preview || !Array.isArray(preview.walls)) {
+    return '<span class="map-preview-fallback" aria-hidden="true"></span>';
+  }
+  const cols = Math.max(1, Number(preview.cols) || 15);
+  const rows = Math.max(1, Number(preview.rows) || 13);
+  const wallRects = [];
+  preview.walls.forEach((row, y) => {
+    String(row).slice(0, cols).split('').forEach((cell, x) => {
+      if (cell === '1') wallRects.push(`<rect class="preview-wall" x="${x}" y="${y}" width="1" height="1" rx=".12"/>`);
+    });
+  });
+  const spawnDots = (Array.isArray(preview.spawns) ? preview.spawns : []).map(([x, y]) =>
+    `<circle class="preview-spawn" cx="${Number(x) + 0.5}" cy="${Number(y) + 0.5}" r=".22"/>`).join('');
+  return `<svg class="map-preview-svg" viewBox="0 0 ${cols} ${rows}" role="img" aria-label="${escapeHtml(map.name)} permanent wall layout">
+    <rect class="preview-floor" width="${cols}" height="${rows}" rx=".55"/>
+    ${wallRects.join('')}
+    ${spawnDots}
+  </svg>`;
+}
+
 function mapOptionMarkup(map, selected) {
   return `<button type="button" class="map-option ${selected ? 'selected' : ''}" data-map-id="${escapeHtml(map.id)}">
-    <span class="map-preview map-${escapeHtml(map.id)}" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+    <span class="map-preview">${mapPreviewMarkup(map)}</span>
     <span class="map-copy">
       <strong>${escapeHtml(map.name)}</strong>
       <small>${escapeHtml(map.description)}</small>
+      <em>Walls shown · crates are randomized</em>
     </span>
     <span class="map-votes">${map.votes} ${map.votes === 1 ? 'vote' : 'votes'}</span>
   </button>`;
@@ -427,13 +584,14 @@ function renderHud() {
 function processEvents(events) {
   const activeKeys = new Set();
   for (const event of events) {
-    const key = `${event.type}:${event.playerId || ''}:${event.killerId || ''}:${event.powerup || ''}:${event.at}`;
+    const key = `${event.type}:${event.playerId || ''}:${event.killerId || ''}:${event.powerup || ''}:${event.bombId || ''}:${event.at}`;
     activeKeys.add(key);
     if (latestEventKeys.has(key)) continue;
     if (event.type === 'pickup' && event.playerId === socket.id) {
       const info = POWER_INFO[event.powerup];
       showToast(`${info?.icon || ''} ${info?.label || event.powerup} acquired`, info?.color || '#b7ef4a');
     }
+    if (event.type === 'explosion') playExplosionSound(Boolean(event.mega));
     if (event.type === 'death') {
       shake = Math.max(shake, 6);
       if (event.playerId === socket.id) {
@@ -476,7 +634,10 @@ function resizeCanvas() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return { width, height, dpr };
 }
-window.addEventListener('resize', resizeCanvas);
+window.addEventListener('resize', () => {
+  resizeCanvas();
+  resizeConfettiCanvas();
+});
 
 function roundedRect(context, x, y, w, h, r) {
   const radius = Math.min(r, w / 2, h / 2);
@@ -490,9 +651,11 @@ function roundedRect(context, x, y, w, h, r) {
 }
 
 function boardLayout(viewWidth, viewHeight) {
-  const tile = Math.floor(Math.min((viewWidth - 70) / 15, (viewHeight - 105) / 13, 64));
-  const boardWidth = tile * 15;
-  const boardHeight = tile * 13;
+  const cols = state?.cols || 15;
+  const rows = state?.rows || 13;
+  const tile = Math.floor(Math.min((viewWidth - 70) / cols, (viewHeight - 105) / rows, 64));
+  const boardWidth = tile * cols;
+  const boardHeight = tile * rows;
   return {
     tile,
     ox: Math.floor((viewWidth - boardWidth) / 2),

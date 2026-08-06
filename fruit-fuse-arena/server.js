@@ -8,8 +8,8 @@ const crypto = require('crypto');
 const PORT = Number(process.env.PORT || 3000);
 const TICK_RATE = 45;
 const SNAPSHOT_RATE = 30;
-const COLS = 17;
-const ROWS = 15;
+const COLS = 15;
+const ROWS = 13;
 const MAX_PLAYERS = 8;
 const BOMB_FUSE_MS = 2200;
 const FLAME_MS = 520;
@@ -119,9 +119,25 @@ function getRoomForSocket(socket) {
   return code ? rooms.get(code) : null;
 }
 
+function mapPreview(mapId) {
+  const walls = [];
+  for (let y = 0; y < ROWS; y += 1) {
+    let row = '';
+    for (let x = 0; x < COLS; x += 1) row += isPermanentWall(mapId, x, y) ? '1' : '0';
+    walls.push(row);
+  }
+  return {
+    cols: COLS,
+    rows: ROWS,
+    walls,
+    spawns: spawnPoints(MAX_PLAYERS),
+  };
+}
+
 function mapVoteSummary(room) {
   return MAPS.map((map) => ({
     ...map,
+    preview: mapPreview(map.id),
     votes: [...room.mapVotes.values()].filter((mapId) => mapId === map.id).length,
     voters: [...room.mapVotes.entries()]
       .filter(([, mapId]) => mapId === map.id)
@@ -740,6 +756,14 @@ function explodeBomb(room, bombId, now) {
   const bomb = game.bombs[bombId];
   if (!bomb || bomb.exploded) return;
   bomb.exploded = true;
+  game.events.push({
+    type: 'explosion',
+    bombId: bomb.id,
+    x: bomb.tx,
+    y: bomb.ty,
+    mega: Boolean(bomb.mega),
+    at: now,
+  });
   const owner = game.players[bomb.ownerId];
   if (owner) owner.bombsPlaced = Math.max(0, owner.bombsPlaced - 1);
 

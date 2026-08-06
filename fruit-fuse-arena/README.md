@@ -6,7 +6,7 @@ A standalone, original browser game inspired by classic grid-based bomb arena pa
 
 - Real online multiplayer using room codes (up to 8 players)
 - Server-authoritative movement, bomb placement, explosions, pickups, deaths, and scoring
-- Three slightly larger 17×15 arenas with a player vote before every round
+- Three original-size 15×13 arenas with a player vote before every round and true wall-layout previews
 - Destructible crate mazes with randomized powerups
 - Chained explosions and self-elimination
 - Starting blast radius of 1; each blast pickup adds exactly one tile to only the collecting player
@@ -18,7 +18,8 @@ A standalone, original browser game inspired by classic grid-based bomb arena pa
 - Line bomb placement
 - 65-second round timer before sudden-death closure, automatic round resets, kill counts, and round wins
 - Tiny measured latency readout beside every player
-- Responsive canvas renderer with original procedural artwork; no external game assets
+- Quiet per-bomb explosion sounds, a round-end cue, and winner-only confetti
+- Responsive canvas renderer with original procedural artwork and synthesized sound effects; no external game assets
 - 45 Hz authoritative simulation and 30 Hz multiplayer snapshots
 - Cached static arena rendering, immediate local movement prediction, and collision-safe reconciliation
 - Dependency-free Node.js server with a small built-in WebSocket implementation
@@ -164,3 +165,13 @@ New bombs now originate at the placing character's exact rendered position and e
 - Upgrade drop chance increased slightly from 28% to 31%.
 - The arena-closing timer was reduced from 90 seconds to 65 seconds.
 - The server measures round-trip latency and displays a small millisecond value in the lobby and scoreboard.
+
+
+## Version 1.5 map preview, audio, and celebration update
+
+- Restored every arena from 17×15 to the original 15×13 dimensions.
+- Map-voting cards now render each map's actual permanent-wall layout and possible spawn points before voting.
+- Destructible crates remain randomized and are labeled accordingly in the preview.
+- Added a short, low-volume synthesized sound for every bomb explosion, including chained explosions.
+- Added a synthesized round-end sound without requiring external audio files.
+- The round winner receives a local confetti celebration visible only on their screen.
