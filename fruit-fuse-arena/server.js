@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const crypto = require('crypto');
+const { version: GAME_VERSION } = require('./package.json');
 
 const PORT = Number(process.env.PORT || 3000);
 const TICK_RATE = 45;
@@ -51,10 +52,21 @@ const rooms = new Map();
 const clients = new Map();
 
 const server = http.createServer((req, res) => {
+  if (req.url === '/version.js') {
+    res.writeHead(200, {
+      'content-type': 'application/javascript; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    res.end(`window.FRUIT_FUSE_VERSION = ${JSON.stringify(GAME_VERSION)};`);
+    return;
+  }
+
   if (req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     res.end(JSON.stringify({
       ok: true,
+      version: GAME_VERSION,
       rooms: rooms.size,
       players: clients.size,
       tickRate: TICK_RATE,
@@ -1277,5 +1289,5 @@ setInterval(() => {
 }, 1000 / TICK_RATE);
 
 server.listen(PORT, () => {
-  console.log(`Fruit Fuse Arena listening on http://localhost:${PORT}`);
+  console.log(`Fruit Fuse Arena v${GAME_VERSION} listening on http://localhost:${PORT}`);
 });

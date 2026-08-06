@@ -14,11 +14,12 @@
     window.FFA3D = {
       available: false,
       resize() {},
-      render() {},
+      render() { return false; },
       reset() {},
       triggerExplosion() {},
       triggerDeath() {},
       resetRound() {},
+      getStatus() { return { available: false, healthy: false, framePresented: false, message }; },
     };
   }
 
@@ -30,9 +31,12 @@
     powerPreference: 'high-performance',
     preserveDrawingBuffer: false,
   };
-  const gl = canvas.getContext('webgl2', contextOptions)
-    || canvas.getContext('webgl', contextOptions)
-    || canvas.getContext('experimental-webgl', contextOptions);
+  // This renderer only uses WebGL 1 features. Prefer that context because it is
+  // more consistent across integrated GPUs and hosted/virtualized browsers.
+  // WebGL 2 remains a fallback for browsers that expose only the newer context.
+  const gl = canvas.getContext('webgl', contextOptions)
+    || canvas.getContext('experimental-webgl', contextOptions)
+    || canvas.getContext('webgl2', contextOptions);
 
   if (!gl) {
     installRendererFallback('This browser could not start the 3D renderer. Enable hardware acceleration or try a current Chrome, Edge, Firefox, or Safari browser.');
@@ -179,6 +183,22 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
   let ambientPulse = 0;
   let lastBoardSignature = '';
   let scenerySeed = 0;
+  let contextLost = false;
+  let framePresented = false;
+  let blankFrameChecks = 0;
+  let lastRenderError = '';
+
+  canvas.addEventListener?.('webglcontextlost', (event) => {
+    event.preventDefault?.();
+    contextLost = true;
+    lastRenderError = 'The browser lost the WebGL context.';
+  });
+  canvas.addEventListener?.('webglcontextrestored', () => {
+    contextLost = false;
+    framePresented = false;
+    blankFrameChecks = 0;
+    lastRenderError = '';
+  });
 
   const COLORS = {
     fog: '#07111c',
@@ -221,6 +241,8 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
     piercing: '#ffd166',
     line: '#80ed99',
   };
+
+  const clearRgb = hexToRgb(COLORS.fog).map((value) => Math.round(value * 255));
 
   function hexToRgb(value) {
     if (Array.isArray(value)) return value;
@@ -1017,7 +1039,44 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
     gl.uniform3fv(locations.cameraPosition, new Float32Array(cameraPosition));
   }
 
+  function probePresentedFrame() {
+    if (framePresented || contextLost || !canvas.width || !canvas.height) return !contextLost;
+    const points = [
+      [0.5, 0.5], [0.38, 0.55], [0.62, 0.55], [0.5, 0.68],
+    ];
+    const pixel = new Uint8Array(4);
+    let differsFromClear = false;
+    for (const [nx, ny] of points) {
+      const px = Math.max(0, Math.min(canvas.width - 1, Math.floor(canvas.width * nx)));
+      const py = Math.max(0, Math.min(canvas.height - 1, Math.floor(canvas.height * ny)));
+      gl.readPixels(px, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      if (Math.abs(pixel[0] - clearRgb[0]) > 3
+        || Math.abs(pixel[1] - clearRgb[1]) > 3
+        || Math.abs(pixel[2] - clearRgb[2]) > 3) {
+        differsFromClear = true;
+        break;
+      }
+    }
+    const error = gl.getError?.() || gl.NO_ERROR;
+    if (error !== gl.NO_ERROR) {
+      lastRenderError = `WebGL error ${error}`;
+      return false;
+    }
+    if (differsFromClear) {
+      framePresented = true;
+      blankFrameChecks = 0;
+      return true;
+    }
+    blankFrameChecks += 1;
+    if (blankFrameChecks >= 4) {
+      lastRenderError = 'The 3D canvas remained blank after the round began.';
+      return false;
+    }
+    return true;
+  }
+
   function renderFrame(payload = {}) {
+    if (contextLost || gl.isContextLost?.()) return false;
     const now = payload.animationTime || performance.now();
     const dt = Math.min(.05, Math.max(0, (now - lastTime) / 1000));
     lastTime = now;
@@ -1027,7 +1086,7 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!state) {
       configureCamera({ cols: 15, rows: 13 }, 0);
-      return;
+      return true;
     }
 
     ambientPulse += dt;
@@ -1040,6 +1099,7 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
     drawPlayers(state, payload.displayPlayers, now);
     drawFlames(state, payload.serverNow || 0, now);
     drawEffects();
+    return probePresentedFrame();
   }
 
   function resize(nextWidth = window.innerWidth, nextHeight = window.innerHeight, nextDpr = Math.min(window.devicePixelRatio || 1, 1.5)) {
@@ -1123,6 +1183,9 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
     particles = [];
     shockwaves = [];
     deathBursts = [];
+    framePresented = false;
+    blankFrameChecks = 0;
+    lastRenderError = '';
   }
 
   resize();
@@ -1134,5 +1197,15 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
     triggerExplosion,
     triggerDeath,
     resetRound,
+    getStatus() {
+      return {
+        available: true,
+        healthy: !contextLost && !lastRenderError,
+        framePresented,
+        contextLost,
+        message: lastRenderError,
+        contextType: isWebGL2 ? 'webgl2' : 'webgl1',
+      };
+    },
   };
 })();

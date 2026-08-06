@@ -80,6 +80,7 @@
 
     <section id="gameScreen" class="screen game-screen">
       <canvas id="gameCanvas" width="1200" height="860" aria-label="Fruit Fuse Arena 3D game world"></canvas>
+      <canvas id="fallbackCanvas" width="1200" height="860" class="fallback-canvas hidden" aria-label="Fruit Fuse Arena compatibility game world"></canvas>
       <div id="worldLabels" class="world-labels" aria-hidden="true"></div>
       <div id="renderNotice" class="render-notice hidden" role="alert"></div>
       <canvas id="confettiCanvas" class="confetti-canvas" aria-hidden="true"></canvas>
@@ -122,6 +123,11 @@
     </section>
   </main>
 
+  <div class="version-badge" title="Fruit Fuse Arena version" aria-label="Game version">
+    v<span id="versionNumber">—</span>
+  </div>
+
+  <script src="/version.js"></script>
   <script src="/renderer3d.js"></script>
   <script src="/client.js"></script>
 </body>

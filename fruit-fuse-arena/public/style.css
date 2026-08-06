@@ -353,7 +353,8 @@ input:focus {
     linear-gradient(180deg, rgba(2, 8, 14, .22), transparent 18% 76%, rgba(2, 8, 14, .30)),
     radial-gradient(circle at center, transparent 48%, rgba(2, 8, 14, .20));
 }
-#gameCanvas {
+#gameCanvas,
+.fallback-canvas {
   position: absolute;
   inset: 0;
   z-index: 1;
@@ -361,6 +362,13 @@ input:focus {
   height: 100%;
   display: block;
   image-rendering: auto;
+}
+.fallback-canvas {
+  z-index: 3;
+  background: #07111c;
+}
+.game-screen.compatibility-mode::after {
+  background: linear-gradient(180deg, rgba(2, 8, 14, .12), transparent 18% 76%, rgba(2, 8, 14, .22));
 }
 .game-ui { z-index: 10; }
 .confetti-canvas { z-index: 40; }
@@ -514,4 +522,27 @@ button.map-option.selected {
   .scoreboard { left: 8px; width: 174px; }
   .power-hud { left: 8px; bottom: 8px; }
   .hud-top { top: 8px; }
+}
+
+
+/* v2.0.3 visible build number */
+.version-badge {
+  position: fixed;
+  left: 50%;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  z-index: 100;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  color: rgba(226, 239, 230, .58);
+  background: rgba(4, 10, 16, .54);
+  border: 1px solid rgba(190, 235, 184, .10);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: .08em;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  user-select: none;
+  backdrop-filter: blur(8px);
 }

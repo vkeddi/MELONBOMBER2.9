@@ -72,9 +72,14 @@ const hudTimer = document.getElementById('hudTimer');
 const toastStack = document.getElementById('toastStack');
 const roundBanner = document.getElementById('roundBanner');
 const canvas = document.getElementById('gameCanvas');
-const ctx = null; // The game world is rendered by renderer3d.js using WebGL.
+const fallbackCanvas = document.getElementById('fallbackCanvas');
+const ctx = fallbackCanvas?.getContext('2d', { alpha: false }) || null;
+const worldLabels = document.getElementById('worldLabels');
+const renderNotice = document.getElementById('renderNotice');
 const confettiCanvas = document.getElementById('confettiCanvas');
 const confettiCtx = confettiCanvas.getContext('2d');
+const versionNumber = document.getElementById('versionNumber');
+if (versionNumber) versionNumber.textContent = window.FRUIT_FUSE_VERSION || 'dev';
 
 nameInput.value = localStorage.getItem('ffa-name') || '';
 const inviteCode = (new URLSearchParams(location.search).get('room') || '')
@@ -105,6 +110,8 @@ let stateReceivedAt = performance.now();
 let hudDirty = false;
 let lastHudRender = 0;
 let rendererRuntimeFailed = false;
+let compatibilityRendererActive = false;
+let compatibilityNoticeShown = false;
 const DISPLAY_RADIUS = 0.275;
 const DISPLAY_CORNER_ASSIST_MAX = 0.26;
 const DISPLAY_MOVE_SUBSTEP = 0.045;
@@ -265,6 +272,37 @@ function showScreen(name) {
   Object.entries(screens).forEach(([key, element]) => element.classList.toggle('active', key === name));
 }
 
+function activateCompatibilityRenderer(reason = '') {
+  if (compatibilityRendererActive) return;
+  compatibilityRendererActive = true;
+  rendererRuntimeFailed = true;
+  canvas?.classList.add('hidden');
+  fallbackCanvas?.classList.remove('hidden');
+  worldLabels?.classList.add('hidden');
+  screens.game?.classList.add('compatibility-mode');
+  if (renderNotice) renderNotice.classList.add('hidden');
+  if (!compatibilityNoticeShown) {
+    compatibilityNoticeShown = true;
+    showToast('3D display recovery enabled — gameplay remains fully active', '#ffd166');
+  }
+  if (reason) console.warn('Using compatibility renderer:', reason);
+}
+
+function renderCompatibilityFrame(width, height) {
+  if (!ctx || !state) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, fallbackCanvas.width, fallbackCanvas.height);
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawBackground(width, height);
+  const layout = boardLayout(width, height);
+  drawBoard(layout);
+  drawPowerups(layout);
+  drawBombs(layout);
+  drawFlames(layout);
+  drawPlayers(layout);
+}
+
 function playerName() {
   const name = nameInput.value.trim().slice(0, 16);
   localStorage.setItem('ffa-name', name);
@@ -384,7 +422,7 @@ socket.on('mapVoteStarted', () => {
 });
 
 socket.on('gameStarted', ({ round, mapName }) => {
-  rendererRuntimeFailed = false;
+  if (!compatibilityRendererActive) rendererRuntimeFailed = false;
   if (renderNotice && window.FFA3D?.available) renderNotice.classList.add('hidden');
   window.FFA3D?.resetRound();
   showScreen('game');
@@ -635,6 +673,17 @@ function resizeCanvas() {
   const width = window.innerWidth;
   const height = window.innerHeight;
   window.FFA3D?.resize(width, height, dpr);
+  if (fallbackCanvas && ctx) {
+    const pixelWidth = Math.max(1, Math.floor(width * dpr));
+    const pixelHeight = Math.max(1, Math.floor(height * dpr));
+    if (fallbackCanvas.width !== pixelWidth || fallbackCanvas.height !== pixelHeight) {
+      fallbackCanvas.width = pixelWidth;
+      fallbackCanvas.height = pixelHeight;
+      fallbackCanvas.style.width = `${width}px`;
+      fallbackCanvas.style.height = `${height}px`;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
   return { width, height, dpr };
 }
 window.addEventListener('resize', () => {
@@ -1234,7 +1283,7 @@ function drawFrame(now) {
   lastFrame = now;
   animationTime = now;
   updateMapVoteCountdown();
-  resizeCanvas();
+  const viewport = resizeCanvas();
   updateDisplayPlayers(dt);
   updateDisplayBombs(dt);
   window.__ffaSocketId = socket.id;
@@ -1246,25 +1295,30 @@ function drawFrame(now) {
   }
 
   if (screens.game.classList.contains('active')) {
-    if (!rendererRuntimeFailed) {
-      try {
-        window.FFA3D?.render({
-          state,
-          displayPlayers,
-          displayBombs,
-          serverNow: estimatedServerNow(),
-          animationTime: now,
-          shake,
-        });
-      } catch (error) {
-        rendererRuntimeFailed = true;
-        console.error('3D renderer stopped during a frame:', error);
-        if (renderNotice) {
-          renderNotice.textContent = 'The 3D scene hit a rendering error. Refresh after updating to the latest build.';
-          renderNotice.classList.remove('hidden');
+    if (!compatibilityRendererActive) {
+      if (!window.FFA3D?.available) {
+        activateCompatibilityRenderer(window.FFA3D?.getStatus?.().message || 'WebGL is unavailable.');
+      } else if (!rendererRuntimeFailed) {
+        try {
+          const rendered = window.FFA3D.render({
+            state,
+            displayPlayers,
+            displayBombs,
+            serverNow: estimatedServerNow(),
+            animationTime: now,
+            shake,
+          });
+          const rendererStatus = window.FFA3D.getStatus?.();
+          if (rendered === false || rendererStatus?.healthy === false) {
+            activateCompatibilityRenderer(rendererStatus?.message || 'The browser did not present the 3D frame.');
+          }
+        } catch (error) {
+          console.error('3D renderer stopped during a frame:', error);
+          activateCompatibilityRenderer(error?.message || 'Unexpected 3D rendering error.');
         }
       }
     }
+    if (compatibilityRendererActive) renderCompatibilityFrame(viewport.width, viewport.height);
     if (shake > .05) shake *= .86;
     else shake = 0;
   }

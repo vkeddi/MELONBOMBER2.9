@@ -34,6 +34,7 @@ function makeElement() {
     innerHTML: '',
     appendChild(child) { children.push(child); },
     remove() {},
+    addEventListener() {},
     querySelector(selector) {
       if (!selectors.has(selector)) selectors.set(selector, makeElement());
       return selectors.get(selector);
@@ -41,7 +42,7 @@ function makeElement() {
   };
 }
 
-function makeFakeGl(isWebGL2) {
+function makeFakeGl(isWebGL2, presentsFrame = true) {
   class FakeWebGL2RenderingContext {}
   const base = isWebGL2 ? new FakeWebGL2RenderingContext() : {};
   const shaderSources = [];
@@ -68,6 +69,9 @@ function makeFakeGl(isWebGL2) {
     TRIANGLES: 0x0004,
     COLOR_BUFFER_BIT: 0x4000,
     DEPTH_BUFFER_BIT: 0x0100,
+    RGBA: 0x1908,
+    UNSIGNED_BYTE: 0x1401,
+    NO_ERROR: 0,
   };
   Object.assign(base, constants, {
     shaderSources,
@@ -112,12 +116,21 @@ function makeFakeGl(isWebGL2) {
     uniformMatrix4fv() {},
     uniformMatrix3fv() {},
     drawElements() {},
+    readPixels(_x, _y, _w, _h, _format, _type, pixel) {
+      if (presentsFrame) {
+        pixel[0] = 90; pixel[1] = 140; pixel[2] = 80; pixel[3] = 255;
+      } else {
+        pixel[0] = 7; pixel[1] = 17; pixel[2] = 28; pixel[3] = 255;
+      }
+    },
+    getError() { return constants.NO_ERROR; },
+    isContextLost() { return false; },
   });
   return { gl: base, FakeWebGL2RenderingContext, shaderSources };
 }
 
-function runRenderer(isWebGL2) {
-  const { gl, FakeWebGL2RenderingContext, shaderSources } = makeFakeGl(isWebGL2);
+function runRenderer(isWebGL2, presentsFrame = true) {
+  const { gl, FakeWebGL2RenderingContext, shaderSources } = makeFakeGl(isWebGL2, presentsFrame);
   const canvas = makeElement();
   canvas.width = 1200;
   canvas.height = 860;
@@ -176,14 +189,31 @@ function runRenderer(isWebGL2) {
   const displayPlayers = new Map(state.players.map((player) => [player.id, player]));
   const displayBombs = new Map(state.bombs.map((bomb) => [bomb.id, bomb]));
   windowObject.FFA3D.resize(1200, 860, 1);
-  windowObject.FFA3D.render({ state, displayPlayers, displayBombs, serverNow: 1100, animationTime: 1100, shake: 0 });
+  let rendered = true;
+  for (let frame = 0; frame < (presentsFrame ? 2 : 4); frame += 1) {
+    rendered = windowObject.FFA3D.render({
+      state,
+      displayPlayers,
+      displayBombs,
+      serverNow: 1100 + frame * 20,
+      animationTime: 1100 + frame * 20,
+      shake: frame ? 3 : 0,
+    });
+  }
   windowObject.FFA3D.triggerExplosion({ x: 3, y: 3, mega: false });
   windowObject.FFA3D.triggerDeath({ playerId: 'p2' });
-  windowObject.FFA3D.render({ state, displayPlayers, displayBombs, serverNow: 1120, animationTime: 1120, shake: 3 });
   assert.equal(notice.textContent, '', 'renderer should not show an initialization error');
   assert.equal(shaderSources.length, 2, 'renderer should compile one vertex and one fragment shader');
+  if (presentsFrame) {
+    assert.equal(rendered, true, 'visible frames should remain on the 3D renderer');
+    assert.equal(windowObject.FFA3D.getStatus().framePresented, true, 'visible frame should be detected');
+  } else {
+    assert.equal(rendered, false, 'four blank gameplay frames should trigger recovery');
+    assert.equal(windowObject.FFA3D.getStatus().healthy, false, 'blank renderer should report unhealthy');
+  }
 }
 
 runRenderer(false);
 runRenderer(true);
-console.log('Renderer runtime test passed for WebGL1 and WebGL2 first-frame rendering.');
+runRenderer(false, false);
+console.log('Renderer runtime test passed for WebGL1/WebGL2 first-frame rendering and blank-frame recovery.');
