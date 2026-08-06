@@ -8,20 +8,21 @@ const crypto = require('crypto');
 const PORT = Number(process.env.PORT || 3000);
 const TICK_RATE = 45;
 const SNAPSHOT_RATE = 30;
-const COLS = 15;
-const ROWS = 13;
+const COLS = 17;
+const ROWS = 15;
 const MAX_PLAYERS = 8;
 const BOMB_FUSE_MS = 2200;
 const FLAME_MS = 520;
-const ROUND_RESET_MS = 3500;
+const ROUND_RESET_MS = 1800;
+const MAP_VOTE_MS = 7000;
 const TRAINING_RESET_MS = 1200;
 const SPAWN_CLEAR_RADIUS = 3;
-const SUDDEN_DEATH_MS = 90000;
+const SUDDEN_DEATH_MS = 65000;
 const PLAYER_RADIUS = 0.28;
 const BOMB_RADIUS = 0.31;
 const KICK_SLIDE_TILES = 4;
 const KICK_SLIDE_SPEED = 7.4;
-const POWERUP_DROP_CHANCE = 0.28;
+const POWERUP_DROP_CHANCE = 0.31;
 const TEST_MODE = process.env.NODE_ENV === 'test' || process.env.FFA_TEST_MODE === '1';
 const MAX_BOMB_MOVE_SUBSTEP = 0.065;
 const MAX_MOVE_SUBSTEP = 0.065;
@@ -29,6 +30,11 @@ const MAX_TICK_MOVEMENT = 0.32;
 const CORNER_ASSIST_MAX = 0.26;
 const CORNER_ASSIST_STEP = 0.055;
 const COLORS = ['#ff5d73', '#55d6be', '#ffd166', '#7aa2ff', '#c77dff', '#ff9f1c', '#80ed99', '#f15bb5'];
+const MAPS = [
+  { id: 'classic', name: 'Classic Grove', description: 'Balanced checkerboard pillars and familiar lanes.' },
+  { id: 'crossroads', name: 'Crossroads', description: 'A broad central cross creates faster encounters.' },
+  { id: 'orchard', name: 'Open Orchard', description: 'Staggered stone rows leave longer movement lanes.' },
+];
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -57,6 +63,9 @@ const server = http.createServer((req, res) => {
       powerupDropChance: POWERUP_DROP_CHANCE,
       kickSlideTiles: KICK_SLIDE_TILES,
       cornerAssist: CORNER_ASSIST_MAX,
+      roundTimerMs: SUDDEN_DEATH_MS,
+      mapVoteMs: MAP_VOTE_MS,
+      mapCount: MAPS.length,
     }));
     return;
   }
@@ -110,17 +119,33 @@ function getRoomForSocket(socket) {
   return code ? rooms.get(code) : null;
 }
 
+function mapVoteSummary(room) {
+  return MAPS.map((map) => ({
+    ...map,
+    votes: [...room.mapVotes.values()].filter((mapId) => mapId === map.id).length,
+    voters: [...room.mapVotes.entries()]
+      .filter(([, mapId]) => mapId === map.id)
+      .map(([playerId]) => playerId),
+  }));
+}
+
 function publicLobby(room) {
   return {
     code: room.code,
     hostId: room.hostId,
     phase: room.phase,
+    mapVoteEndsAt: room.mapVoteEndsAt,
+    selectedMapId: room.selectedMapId,
+    currentMapId: room.game?.mapId || null,
+    maps: mapVoteSummary(room),
     players: [...room.players.values()].map((p) => ({
       id: p.id,
       name: p.name,
       color: p.color,
       score: p.score,
       connected: p.connected,
+      latencyMs: p.latencyMs,
+      mapVote: room.mapVotes.get(p.id) || null,
     })),
   };
 }
@@ -135,6 +160,7 @@ function leaveCurrentRoom(socket) {
 
   room.players.delete(socket.id);
   room.inputs.delete(socket.id);
+  room.mapVotes.delete(socket.id);
 
   if (room.game?.players[socket.id]) {
     room.game.players[socket.id].alive = false;
@@ -163,6 +189,7 @@ function createRoom(socket, rawName) {
     color: COLORS[0],
     score: 0,
     connected: true,
+    latencyMs: null,
   };
   const room = {
     code,
@@ -171,6 +198,9 @@ function createRoom(socket, rawName) {
     players: new Map([[socket.id, player]]),
     inputs: new Map(),
     game: null,
+    mapVotes: new Map(),
+    mapVoteEndsAt: null,
+    selectedMapId: 'classic',
     lastSnapshotAt: 0,
   };
   rooms.set(code, room);
@@ -192,6 +222,7 @@ function joinRoom(socket, rawCode, rawName) {
     color: COLORS[room.players.size % COLORS.length],
     score: 0,
     connected: true,
+    latencyMs: null,
   };
   room.players.set(socket.id, player);
   socket.data.roomCode = code;
@@ -224,23 +255,35 @@ function spawnPoints(count) {
   return all.slice(0, count);
 }
 
-function buildGrid(spawns) {
+function isPermanentWall(mapId, x, y) {
+  if (x === 0 || y === 0 || x === COLS - 1 || y === ROWS - 1) return true;
+  if (mapId === 'crossroads') {
+    const centerX = Math.floor(COLS / 2);
+    const centerY = Math.floor(ROWS / 2);
+    if (Math.abs(x - centerX) <= 1 || Math.abs(y - centerY) <= 1) return false;
+    return x % 2 === 0 && y % 2 === 0;
+  }
+  if (mapId === 'orchard') {
+    return y % 3 === 0 && x % 2 === 0;
+  }
+  return x % 2 === 0 && y % 2 === 0;
+}
+
+function buildGrid(spawns, mapId) {
   const grid = new Array(COLS * ROWS).fill(0);
+  const crateChance = mapId === 'crossroads' ? 0.68 : mapId === 'orchard' ? 0.66 : 0.72;
   for (let y = 0; y < ROWS; y += 1) {
     for (let x = 0; x < COLS; x += 1) {
-      if (x === 0 || y === 0 || x === COLS - 1 || y === ROWS - 1 || (x % 2 === 0 && y % 2 === 0)) {
-        grid[idx(x, y)] = 1; // permanent wall
-      } else if (Math.random() < 0.72) {
-        grid[idx(x, y)] = 2; // crate
+      if (isPermanentWall(mapId, x, y)) {
+        grid[idx(x, y)] = 1;
+      } else if (Math.random() < crateChance) {
+        grid[idx(x, y)] = 2;
       }
     }
   }
 
   for (const [sx, sy] of spawns) {
-    // Clear a small diamond around every spawn. With a two-tile starting blast,
-    // clearing only the four adjacent cells creates dead-end pockets beside the
-    // permanent checkerboard walls. The radius-three diamond guarantees at
-    // least one L-shaped escape route without removing permanent walls.
+    // Each spawn gets two clear L-shaped exits even on the larger maps.
     for (let dy = -SPAWN_CLEAR_RADIUS; dy <= SPAWN_CLEAR_RADIUS; dy += 1) {
       for (let dx = -SPAWN_CLEAR_RADIUS; dx <= SPAWN_CLEAR_RADIUS; dx += 1) {
         if (Math.abs(dx) + Math.abs(dy) > SPAWN_CLEAR_RADIUS) continue;
@@ -272,7 +315,7 @@ function makeSuddenDeathQueue() {
   return queue.filter(([x, y]) => !(x % 2 === 0 && y % 2 === 0));
 }
 
-function createGame(room) {
+function createGame(room, mapId = room.selectedMapId || 'classic') {
   const entries = [...room.players.values()];
   const spawns = spawnPoints(entries.length);
   const now = Date.now();
@@ -314,7 +357,8 @@ function createGame(room) {
     nextDeathBlockAt: now + SUDDEN_DEATH_MS,
     roundEndsAt: null,
     winnerId: null,
-    grid: buildGrid(spawns),
+    mapId,
+    grid: buildGrid(spawns, mapId),
     players,
     bombs: {},
     flames: [],
@@ -325,12 +369,40 @@ function createGame(room) {
   };
 }
 
+function chooseVotedMap(room) {
+  const counts = new Map(MAPS.map((map) => [map.id, 0]));
+  for (const mapId of room.mapVotes.values()) {
+    if (counts.has(mapId)) counts.set(mapId, counts.get(mapId) + 1);
+  }
+  const highest = Math.max(...counts.values());
+  if (highest <= 0) return room.selectedMapId || MAPS[0].id;
+  const finalists = MAPS.filter((map) => counts.get(map.id) === highest);
+  return finalists[Math.floor(Math.random() * finalists.length)].id;
+}
+
 function startGame(room) {
   if (room.players.size < 1) return;
+  room.selectedMapId = chooseVotedMap(room);
   room.phase = 'playing';
-  room.game = createGame(room);
-  broadcastRoom(room, 'gameStarted', { round: room.game.round });
+  room.mapVoteEndsAt = null;
+  room.game = createGame(room, room.selectedMapId);
+  room.mapVotes.clear();
+  broadcastRoom(room, 'gameStarted', {
+    round: room.game.round,
+    mapId: room.game.mapId,
+    mapName: MAPS.find((map) => map.id === room.game.mapId)?.name || 'Arena',
+  });
   broadcastLobby(room);
+}
+
+function beginMapVote(room, now) {
+  if (room.players.size === 0) return;
+  room.phase = 'mapVote';
+  room.mapVotes.clear();
+  room.mapVoteEndsAt = now + MAP_VOTE_MS;
+  if (room.game) room.game.phase = 'mapVote';
+  broadcastLobby(room);
+  broadcastRoom(room, 'mapVoteStarted', { endsAt: room.mapVoteEndsAt, maps: mapVoteSummary(room) });
 }
 
 function circleRectOverlap(cx, cy, radius, rx, ry, rw = 1, rh = 1) {
@@ -700,7 +772,7 @@ function applyPowerup(player, type) {
   switch (type) {
     case 'speed': player.speed = Math.min(6.2, player.speed + 0.38); break;
     case 'bomb': player.maxBombs = Math.min(9, player.maxBombs + 1); break;
-    case 'range': player.range = Math.min(10, player.range + 1); break;
+    case 'range': player.range = Math.min(10, player.range + 1); break; // exactly one tile, collector only
     case 'kick': player.kick = true; break;
     case 'mega': player.megaCharges = Math.min(3, player.megaCharges + 1); break;
     case 'remote': player.remote = true; break;
@@ -779,17 +851,31 @@ function evaluateRound(room, now) {
 
 function resetRound(room) {
   if (room.players.size === 0) return;
-  room.game = createGame(room);
-  broadcastRoom(room, 'gameStarted', { round: room.game.round });
+  room.selectedMapId = chooseVotedMap(room);
+  room.phase = 'playing';
+  room.mapVoteEndsAt = null;
+  room.game = createGame(room, room.selectedMapId);
+  room.mapVotes.clear();
+  broadcastRoom(room, 'gameStarted', {
+    round: room.game.round,
+    mapId: room.game.mapId,
+    mapName: MAPS.find((map) => map.id === room.game.mapId)?.name || 'Arena',
+  });
   broadcastLobby(room);
 }
 
 function tickRoom(room, dt, now) {
   const game = room.game;
-  if (!game || room.phase !== 'playing') return;
+  if (!game) return;
+
+  if (room.phase === 'mapVote') {
+    if (room.mapVoteEndsAt && now >= room.mapVoteEndsAt) resetRound(room);
+    return;
+  }
+  if (room.phase !== 'playing') return;
 
   if (game.phase === 'roundOver') {
-    if (now >= game.roundEndsAt) resetRound(room);
+    if (now >= game.roundEndsAt) beginMapVote(room, now);
     return;
   }
 
@@ -826,6 +912,8 @@ function snapshot(room, now) {
     round: game.round,
     roundEndsAt: game.roundEndsAt,
     winnerId: game.winnerId,
+    mapId: game.mapId,
+    mapName: MAPS.find((map) => map.id === game.mapId)?.name || 'Arena',
     grid: game.grid,
     cols: COLS,
     rows: ROWS,
@@ -850,6 +938,7 @@ function snapshot(room, now) {
       megaCharges: p.megaCharges,
       kills: p.kills,
       score: room.players.get(p.id)?.score || 0,
+      latencyMs: room.players.get(p.id)?.latencyMs ?? null,
     })),
     bombs: Object.values(game.bombs).map((b) => ({
       id: b.id,
@@ -977,6 +1066,32 @@ function handleClientEvent(socket, event, data) {
     leaveCurrentRoom(socket);
     return;
   }
+  if (event === 'latencyPong') {
+    if (data.nonce && data.nonce === socket.data.pingNonce && socket.data.pingSentAt) {
+      const sample = Math.max(0, Math.min(999, Date.now() - socket.data.pingSentAt));
+      socket.data.latencyMs = socket.data.latencyMs == null
+        ? sample
+        : Math.round(socket.data.latencyMs * 0.7 + sample * 0.3);
+      socket.data.pingNonce = null;
+      const room = getRoomForSocket(socket);
+      const player = room?.players.get(socket.id);
+      if (player) player.latencyMs = socket.data.latencyMs;
+      if (room && room.phase !== 'playing') broadcastLobby(room);
+    }
+    return;
+  }
+  if (event === 'voteMap') {
+    const room = getRoomForSocket(socket);
+    const mapId = String(data.mapId || '');
+    if (!room || !MAPS.some((map) => map.id === mapId)) return;
+    if (room.phase !== 'lobby' && room.phase !== 'mapVote') return;
+    room.mapVotes.set(socket.id, mapId);
+    if (room.phase === 'mapVote' && room.mapVotes.size >= room.players.size) {
+      room.mapVoteEndsAt = Math.min(room.mapVoteEndsAt || Infinity, Date.now() + 1200);
+    }
+    broadcastLobby(room);
+    return;
+  }
   if (event === 'startGame') {
     const room = getRoomForSocket(socket);
     if (room && room.hostId === socket.id && room.phase === 'lobby') startGame(room);
@@ -1003,6 +1118,21 @@ function handleClientEvent(socket, event, data) {
     socket.data.lastActionAt = now;
     const room = getRoomForSocket(socket);
     if (!room) return;
+    if (TEST_MODE && data.type === 'testGiveRangePowerup') {
+      const player = room.game?.players[socket.id];
+      if (!player?.alive) return;
+      const tx = Math.floor(player.x);
+      const ty = Math.floor(player.y);
+      room.game.powerups[powerupKey(tx, ty)] = { x: tx, y: ty, type: 'range' };
+      return;
+    }
+    if (TEST_MODE && data.type === 'testFinishRound') {
+      if (!room.game) return;
+      for (const player of Object.values(room.game.players)) {
+        player.alive = player.id === socket.id;
+      }
+      return;
+    }
     if (TEST_MODE && data.type === 'testPrepareKick') {
       const player = room.game?.players[socket.id];
       if (!player?.alive) return;
@@ -1081,7 +1211,15 @@ server.on('upgrade', (req, rawSocket) => {
     raw: rawSocket,
     buffer: Buffer.alloc(0),
     closed: false,
-    data: { roomCode: null, lastActionAt: 0, lastInputAt: 0 },
+    data: {
+      roomCode: null,
+      lastActionAt: 0,
+      lastInputAt: 0,
+      latencyMs: null,
+      lastPingAt: 0,
+      pingNonce: null,
+      pingSentAt: 0,
+    },
   };
   clients.set(client.id, client);
   sendEvent(client, 'welcome', { id: client.id });
@@ -1097,6 +1235,14 @@ setInterval(() => {
   const now = Date.now();
   const dt = Math.min((now - lastTick) / 1000, 0.05);
   lastTick = now;
+  for (const client of clients.values()) {
+    if (now - client.data.lastPingAt >= 2000) {
+      client.data.lastPingAt = now;
+      client.data.pingNonce = crypto.randomBytes(6).toString('hex');
+      client.data.pingSentAt = now;
+      sendEvent(client, 'latencyPing', { nonce: client.data.pingNonce });
+    }
+  }
   for (const room of rooms.values()) {
     tickRoom(room, dt, now);
     if (room.phase === 'playing' && now - room.lastSnapshotAt >= 1000 / SNAPSHOT_RATE) {

@@ -59,6 +59,10 @@ const startButton = document.getElementById('startButton');
 const waitingText = document.getElementById('waitingText');
 const playerList = document.getElementById('playerList');
 const playerCount = document.getElementById('playerCount');
+const mapVoteOptions = document.getElementById('mapVoteOptions');
+const mapVoteOverlay = document.getElementById('mapVoteOverlay');
+const gameMapVoteOptions = document.getElementById('gameMapVoteOptions');
+const mapVoteCountdown = document.getElementById('mapVoteCountdown');
 const leaveGame = document.getElementById('leaveGame');
 const scoreboard = document.getElementById('scoreboard');
 const powerHud = document.getElementById('powerHud');
@@ -74,6 +78,10 @@ nameInput.value = localStorage.getItem('ffa-name') || '';
 const inviteCode = (new URLSearchParams(location.search).get('room') || '')
   .replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 5);
 if (inviteCode.length === 5) codeInput.value = inviteCode;
+
+socket.on('latencyPing', ({ nonce }) => {
+  if (nonce) socket.emit('latencyPong', { nonce });
+});
 
 socket.on('welcome', () => {
   if (inviteCode.length === 5 && nameInput.value.trim()) {
@@ -113,7 +121,7 @@ const keyMap = {
 const POWER_INFO = {
   speed: { icon: '⚡', label: 'Speed', color: '#55d6be' },
   bomb: { icon: '●', label: 'Bomb+', color: '#f6f7fb' },
-  range: { icon: '✦', label: 'Range', color: '#ff9f1c' },
+  range: { icon: '✦', label: 'Blast +1', color: '#ff9f1c' },
   kick: { icon: '➜', label: 'Kick', color: '#7aa2ff' },
   mega: { icon: '◆', label: 'Mega', color: '#ff5d73' },
   remote: { icon: '⌁', label: 'Remote', color: '#c77dff' },
@@ -186,6 +194,14 @@ leaveLobby.addEventListener('click', leaveRoom);
 leaveGame.addEventListener('click', leaveRoom);
 startButton.addEventListener('click', () => socket.emit('startGame'));
 
+function handleMapVoteClick(event) {
+  const option = event.target.closest('[data-map-id]');
+  if (!option) return;
+  socket.emit('voteMap', { mapId: option.dataset.mapId });
+}
+mapVoteOptions.addEventListener('click', handleMapVoteClick);
+gameMapVoteOptions.addEventListener('click', handleMapVoteClick);
+
 function leaveRoom() {
   socket.emit('leaveRoom');
   currentRoom = null;
@@ -194,6 +210,7 @@ function leaveRoom() {
   displayPlayers.clear();
   displayBombs.clear();
   pendingBombAnchors = [];
+  mapVoteOverlay.classList.add('hidden');
   releaseInputs();
   const cleanUrl = new URL(location.href);
   cleanUrl.searchParams.delete('room');
@@ -215,14 +232,30 @@ socket.on('lobby', (data) => {
   roomUrl.searchParams.set('room', data.code);
   history.replaceState(null, '', roomUrl);
   renderLobby();
-  if (data.phase === 'lobby') showScreen('lobby');
+  if (data.phase === 'lobby') {
+    mapVoteOverlay.classList.add('hidden');
+    showScreen('lobby');
+  } else if (data.phase === 'mapVote') {
+    roundBanner.classList.add('hidden');
+    mapVoteOverlay.classList.remove('hidden');
+    showScreen('game');
+  } else {
+    mapVoteOverlay.classList.add('hidden');
+  }
 });
 
-socket.on('gameStarted', ({ round }) => {
+socket.on('mapVoteStarted', () => {
+  roundBanner.classList.add('hidden');
+  mapVoteOverlay.classList.remove('hidden');
   showScreen('game');
+});
+
+socket.on('gameStarted', ({ round, mapName }) => {
+  showScreen('game');
+  mapVoteOverlay.classList.add('hidden');
   roundBanner.classList.add('hidden');
   hudRound.textContent = String(round);
-  showToast(`Round ${round}`, '#b7ef4a');
+  showToast(`Round ${round} · ${mapName || 'Arena'}`, '#b7ef4a');
 });
 
 socket.on('state', (nextState) => {
@@ -237,7 +270,7 @@ socket.on('state', (nextState) => {
 
 socket.on('roundOver', ({ winnerName }) => {
   const title = winnerName ? `${winnerName} wins!` : 'Nobody survived';
-  roundBanner.innerHTML = `<strong>${escapeHtml(title)}</strong><span>Next round starting soon…</span>`;
+  roundBanner.innerHTML = `<strong>${escapeHtml(title)}</strong><span>Map vote starting…</span>`;
   roundBanner.classList.remove('hidden');
 });
 
@@ -247,6 +280,29 @@ socket.on('disconnect', () => {
   if (!screens.menu.classList.contains('active')) showToast('Connection lost', '#ff8da0');
 });
 
+function latencyLabel(value) {
+  return Number.isFinite(value) ? `${Math.round(value)}ms` : '—ms';
+}
+
+function mapOptionMarkup(map, selected) {
+  return `<button type="button" class="map-option ${selected ? 'selected' : ''}" data-map-id="${escapeHtml(map.id)}">
+    <span class="map-preview map-${escapeHtml(map.id)}" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+    <span class="map-copy">
+      <strong>${escapeHtml(map.name)}</strong>
+      <small>${escapeHtml(map.description)}</small>
+    </span>
+    <span class="map-votes">${map.votes} ${map.votes === 1 ? 'vote' : 'votes'}</span>
+  </button>`;
+}
+
+function renderMapVotes() {
+  if (!lobby?.maps) return;
+  const myVote = lobby.players.find((player) => player.id === socket.id)?.mapVote || null;
+  const markup = lobby.maps.map((map) => mapOptionMarkup(map, map.id === myVote)).join('');
+  mapVoteOptions.innerHTML = markup;
+  gameMapVoteOptions.innerHTML = markup;
+}
+
 function renderLobby() {
   if (!lobby) return;
   playerCount.textContent = `${lobby.players.length} / 8`;
@@ -254,13 +310,15 @@ function renderLobby() {
     <div class="player-card">
       <span class="player-dot" style="background:${player.color}"></span>
       <strong>${escapeHtml(player.name)}${player.id === socket.id ? ' (you)' : ''}</strong>
+      <span class="latency-badge">${latencyLabel(player.latencyMs)}</span>
       ${player.id === lobby.hostId ? '<span class="host-badge">HOST</span>' : ''}
     </div>
   `).join('');
+  renderMapVotes();
   const isHost = lobby.hostId === socket.id;
   startButton.classList.toggle('hidden', !isHost);
   waitingText.classList.toggle('hidden', isHost);
-  startButton.textContent = lobby.players.length === 1 ? 'Start training round' : 'Start match';
+  startButton.textContent = lobby.players.length === 1 ? 'Start training round' : 'Start voted map';
 }
 
 function queueLocalBombAnchor() {
@@ -339,6 +397,7 @@ function renderHud() {
     <div class="score-row ${p.id === socket.id ? 'me' : ''}">
       <span class="score-color" style="background:${p.color}"></span>
       <span class="${p.alive ? '' : 'dead-name'}">${escapeHtml(p.name)}</span>
+      <span class="score-latency">${latencyLabel(p.latencyMs)}</span>
       <span class="score-kills">${p.kills}K</span>
       <span class="score-points">${p.score}</span>
     </div>
@@ -997,10 +1056,18 @@ function shadeColor(hex, amount) {
   return `rgb(${r},${g},${b})`;
 }
 
+function updateMapVoteCountdown() {
+  if (!lobby || lobby.phase !== 'mapVote' || !lobby.mapVoteEndsAt) return;
+  const remaining = Math.max(0, lobby.mapVoteEndsAt - (state ? estimatedServerNow() : Date.now()));
+  const voted = lobby.players.filter((player) => player.mapVote).length;
+  mapVoteCountdown.textContent = `${Math.ceil(remaining / 1000)}s · ${voted}/${lobby.players.length} voted`;
+}
+
 function drawFrame(now) {
   const dt = Math.min((now - lastFrame) / 1000, .05);
   lastFrame = now;
   animationTime = now;
+  updateMapVoteCountdown();
   const view = resizeCanvas();
   updateDisplayPlayers(dt);
   updateDisplayBombs(dt);

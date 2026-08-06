@@ -43,8 +43,9 @@ async function run() {
     await waitForServer(child);
     const health = await fetch(`http://127.0.0.1:${port}/health`).then((response) => response.json());
     if (!health.ok || health.tickRate !== 45 || health.snapshotRate !== 30
-      || health.startingRange !== 1 || health.powerupDropChance !== 0.28 || health.kickSlideTiles !== 4
-      || health.cornerAssist !== 0.26) {
+      || health.startingRange !== 1 || health.powerupDropChance !== 0.31 || health.kickSlideTiles !== 4
+      || health.cornerAssist !== 0.26 || health.roundTimerMs !== 65000
+      || health.mapVoteMs !== 7000 || health.mapCount !== 3) {
       throw new Error('Health check or gameplay configuration failed');
     }
 
@@ -55,6 +56,14 @@ async function run() {
       let betaId = null;
       let code = null;
       let started = false;
+      let alphaInitialVoteSent = false;
+      let betaInitialVoteSent = false;
+      let rangeUpgradeRequested = false;
+      let rangeUpgradeConfirmed = false;
+      let rangeUpgradeConfirmedAt = 0;
+      let waitingForSecondRound = false;
+      let alphaSecondVoteSent = false;
+      let betaSecondVoteSent = false;
       let controlsSentAt = 0;
       let turnSent = false;
       let stopSent = false;
@@ -76,7 +85,7 @@ async function run() {
       let rapidTurnPrepared = false;
       let rapidTurnStartedAt = 0;
       let finished = false;
-      const timeout = setTimeout(() => reject(new Error('Multiplayer flow timed out')), 9000);
+      const timeout = setTimeout(() => reject(new Error('Multiplayer flow timed out')), 16000);
       const send = (socket, event, data = {}) => socket.send(JSON.stringify({ event, data }));
       const finish = () => {
         if (finished) return;
@@ -97,31 +106,89 @@ async function run() {
 
       alpha.onmessage = ({ data }) => {
         const packet = JSON.parse(data);
+        if (packet.event === 'latencyPing') {
+          send(alpha, 'latencyPong', { nonce: packet.data.nonce });
+          return;
+        }
         if (packet.event === 'welcome') {
           alphaId = packet.data.id;
           send(alpha, 'createRoom', { name: 'Alpha' });
         }
-        if (packet.event === 'lobby' && !code) code = packet.data.code;
-        if (packet.event === 'lobby' && packet.data.players.length === 2 && !started) {
-          started = true;
-          send(alpha, 'startGame');
+        if (packet.event === 'lobby') {
+          if (!code) code = packet.data.code;
+          if (packet.data.phase === 'lobby' && packet.data.players.length === 2 && !alphaInitialVoteSent) {
+            alphaInitialVoteSent = true;
+            send(alpha, 'voteMap', { mapId: 'crossroads' });
+          }
+          if (packet.data.phase === 'lobby' && packet.data.players.length === 2
+            && packet.data.players.every((player) => player.mapVote === 'crossroads') && !started) {
+            started = true;
+            send(alpha, 'startGame');
+          }
+          if (packet.data.phase === 'mapVote' && !alphaSecondVoteSent) {
+            alphaSecondVoteSent = true;
+            send(alpha, 'voteMap', { mapId: 'orchard' });
+          }
         }
         if (packet.event !== 'state') return;
 
         const snapshot = packet.data;
-        if (snapshot.players.length !== 2 || snapshot.grid.length !== 195) {
-          fail(new Error('Invalid authoritative state shape'));
+        if (snapshot.players.length !== 2 || snapshot.grid.length !== 255
+          || snapshot.cols !== 17 || snapshot.rows !== 15) {
+          fail(new Error('Invalid larger authoritative state shape'));
+          return;
+        }
+        if (snapshot.suddenDeathIn > 65050 || snapshot.suddenDeathIn < 0) {
+          fail(new Error(`Round timer was not reduced to 65 seconds (${snapshot.suddenDeathIn})`));
           return;
         }
         const alphaPlayer = snapshot.players.find((player) => player.id === alphaId);
         const betaPlayer = snapshot.players.find((player) => player.id === betaId);
         if (!alphaPlayer || !betaPlayer) return;
-        if (alphaPlayer.range !== 1 || betaPlayer.range !== 1) {
-          fail(new Error('Players did not start with blast radius 1'));
+        if (waitingForSecondRound) {
+          if (snapshot.round >= 2) {
+            if (snapshot.mapId !== 'orchard') {
+              fail(new Error(`Between-round map vote selected ${snapshot.mapId} instead of orchard`));
+              return;
+            }
+            if (!Number.isFinite(alphaPlayer.latencyMs) || !Number.isFinite(betaPlayer.latencyMs)) {
+              fail(new Error('Per-player latency values were not measured'));
+              return;
+            }
+            finish();
+          }
           return;
         }
 
+        if (!rangeUpgradeRequested) {
+          if (snapshot.mapId !== 'crossroads') {
+            fail(new Error(`Initial map vote selected ${snapshot.mapId} instead of crossroads`));
+            return;
+          }
+          if (alphaPlayer.range !== 1 || betaPlayer.range !== 1) {
+            fail(new Error('Players did not start with blast radius 1'));
+            return;
+          }
+          rangeUpgradeRequested = true;
+          send(alpha, 'action', { type: 'testGiveRangePowerup' });
+          return;
+        }
+
+        if (!rangeUpgradeConfirmed) {
+          if (alphaPlayer.range === 2 && betaPlayer.range === 1) {
+            rangeUpgradeConfirmed = true;
+            rangeUpgradeConfirmedAt = Date.now();
+            return;
+          } else if (alphaPlayer.range !== 1 || betaPlayer.range !== 1) {
+            fail(new Error(`Range pickup was not +1 for only the collector (${alphaPlayer.range}, ${betaPlayer.range})`));
+            return;
+          } else {
+            return;
+          }
+        }
+
         if (!controlsSentAt) {
+          if (Date.now() - rangeUpgradeConfirmedAt < 130) return;
           // The upper-left spawn must have at least one guaranteed L-shaped
           // route out of a two-tile blast: right-right-down or down-down-right.
           const cell = (x, y) => snapshot.grid[y * snapshot.cols + x];
@@ -159,8 +226,8 @@ async function run() {
         maxBetaY = Math.max(maxBetaY, betaPlayer.y);
 
         // Beta begins at the bottom-right spawn. Its circle must never enter the
-        // permanent border walls at x=14 or y=12.
-        if (betaPlayer.x > 13.715 || betaPlayer.y > 11.715) {
+        // permanent border walls at x=16 or y=14.
+        if (betaPlayer.x > 15.715 || betaPlayer.y > 13.715) {
           fail(new Error(`Wall collision failed at ${betaPlayer.x.toFixed(3)}, ${betaPlayer.y.toFixed(3)}`));
           return;
         }
@@ -201,7 +268,8 @@ async function run() {
               fail(new Error(`Rapid input replacement failed at ${alphaPlayer.x.toFixed(3)}, ${alphaPlayer.y.toFixed(3)}`));
               return;
             }
-            finish();
+            waitingForSecondRound = true;
+            send(alpha, 'action', { type: 'testFinishRound' });
           }
           return;
         }
@@ -262,19 +330,34 @@ async function run() {
 
       beta.onmessage = ({ data }) => {
         const packet = JSON.parse(data);
-        if (packet.event !== 'welcome') return;
-        betaId = packet.data.id;
-        const joinWhenReady = () => {
-          if (code) send(beta, 'joinRoom', { code, name: 'Beta' });
-          else setTimeout(joinWhenReady, 20);
-        };
-        joinWhenReady();
+        if (packet.event === 'latencyPing') {
+          send(beta, 'latencyPong', { nonce: packet.data.nonce });
+          return;
+        }
+        if (packet.event === 'welcome') {
+          betaId = packet.data.id;
+          const joinWhenReady = () => {
+            if (code) send(beta, 'joinRoom', { code, name: 'Beta' });
+            else setTimeout(joinWhenReady, 20);
+          };
+          joinWhenReady();
+          return;
+        }
+        if (packet.event === 'lobby' && packet.data.phase === 'lobby'
+          && packet.data.players.length === 2 && !betaInitialVoteSent) {
+          betaInitialVoteSent = true;
+          send(beta, 'voteMap', { mapId: 'crossroads' });
+        }
+        if (packet.event === 'lobby' && packet.data.phase === 'mapVote' && !betaSecondVoteSent) {
+          betaSecondVoteSent = true;
+          send(beta, 'voteMap', { mapId: 'orchard' });
+        }
       };
       alpha.onerror = fail;
       beta.onerror = fail;
     });
 
-    console.log('Integration test passed: centered bomb placement, multiplayer sync, radius 1, spawn escape, border collision, smooth multi-tile kicking, corner assistance, and rapid direction changes.');
+    console.log('Integration test passed: larger voted maps, personal +1 blast pickups, 65-second rounds, latency, centered bombs, multiplayer sync, escape lanes, collisions, kicking, corner assistance, and rapid turns.');
   } finally {
     child.kill('SIGTERM');
   }

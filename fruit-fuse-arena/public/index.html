@@ -63,6 +63,17 @@
             <button id="startButton" class="primary hidden">Start match</button>
             <p id="waitingText" class="waiting">Waiting for the host…</p>
           </div>
+
+          <div class="panel map-vote-panel">
+            <div class="panel-title">
+              <div>
+                <p class="eyebrow">ROUND MAP</p>
+                <h3>Choose the next arena</h3>
+              </div>
+              <span>Everyone gets one vote</span>
+            </div>
+            <div id="mapVoteOptions" class="map-options"></div>
+          </div>
         </div>
       </div>
     </section>
@@ -79,7 +90,7 @@
             <span>ROUND</span><strong id="hudRound">1</strong>
           </div>
           <div class="hud-card danger-hud">
-            <span>ARENA CLOSES</span><strong id="hudTimer">1:30</strong>
+            <span>ARENA CLOSES</span><strong id="hudTimer">1:05</strong>
           </div>
           <button id="leaveGame" class="hud-card leave-game" title="Leave game">×</button>
         </div>
@@ -88,6 +99,14 @@
         <div id="powerHud" class="power-hud"></div>
         <div id="toastStack" class="toast-stack"></div>
         <div id="roundBanner" class="round-banner hidden"></div>
+        <div id="mapVoteOverlay" class="map-vote-overlay hidden">
+          <div class="map-vote-dialog panel">
+            <p class="eyebrow">NEXT ROUND</p>
+            <h2>Vote for a map</h2>
+            <p id="mapVoteCountdown" class="map-vote-countdown">Voting…</p>
+            <div id="gameMapVoteOptions" class="map-options compact"></div>
+          </div>
+        </div>
 
         <div class="controls-hint">
           <span><kbd>WASD</kbd> Move</span>

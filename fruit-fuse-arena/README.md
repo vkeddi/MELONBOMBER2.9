@@ -6,15 +6,18 @@ A standalone, original browser game inspired by classic grid-based bomb arena pa
 
 - Real online multiplayer using room codes (up to 8 players)
 - Server-authoritative movement, bomb placement, explosions, pickups, deaths, and scoring
-- Destructible crate maze with randomized powerups
+- Three slightly larger 17×15 arenas with a player vote before every round
+- Destructible crate mazes with randomized powerups
 - Chained explosions and self-elimination
-- Starting blast radius of 1, plus speed, bomb-capacity, and blast-range upgrades
+- Starting blast radius of 1; each blast pickup adds exactly one tile to only the collecting player
+- Speed, bomb-capacity, and special ability upgrades remain player-specific
 - Passive bomb kicking that smoothly slides bombs up to four tiles, stopping at obstacles
 - Mega bomb charges
 - Remote-controlled bombs
 - Piercing explosions
 - Line bomb placement
-- Automatic round resets, kill counts, round wins, and sudden-death arena closure
+- 65-second round timer before sudden-death closure, automatic round resets, kill counts, and round wins
+- Tiny measured latency readout beside every player
 - Responsive canvas renderer with original procedural artwork; no external game assets
 - 45 Hz authoritative simulation and 30 Hz multiplayer snapshots
 - Cached static arena rendering, immediate local movement prediction, and collision-safe reconciliation
@@ -150,3 +153,14 @@ New bombs now originate at the placing character's exact rendered position and e
 - Reduced the idle hover animation while moving so characters feel grounded rather than floaty.
 - Rapid direction-change packets are no longer discarded, so quick turns register immediately.
 - Remote-player smoothing was tightened to make other players appear more responsive.
+
+
+## Version 1.4 map vote, balance, and latency update
+
+- Arenas increased from 15×13 to 17×15.
+- Added Classic Grove, Crossroads, and Open Orchard layouts.
+- Every player can vote for the first map in the lobby and the next map between rounds.
+- Blast-range pickups add exactly one tile and modify only the player who collects them.
+- Upgrade drop chance increased slightly from 28% to 31%.
+- The arena-closing timer was reduced from 90 seconds to 65 seconds.
+- The server measures round-trip latency and displays a small millisecond value in the lobby and scoreboard.
