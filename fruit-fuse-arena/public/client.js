@@ -87,13 +87,18 @@ let currentRoom = null;
 let latestEventKeys = new Set();
 let displayPlayers = new Map();
 let displayBombs = new Map();
+let pendingBombAnchors = [];
 let animationTime = 0;
 let shake = 0;
 let lastFrame = performance.now();
 let stateReceivedAt = performance.now();
 let hudDirty = false;
 let lastHudRender = 0;
-const DISPLAY_RADIUS = 0.285;
+const DISPLAY_RADIUS = 0.275;
+const DISPLAY_CORNER_ASSIST_MAX = 0.26;
+const DISPLAY_MOVE_SUBSTEP = 0.045;
+const LOCAL_PREDICTION_LEAD = 0.22;
+const BOMB_SPAWN_SETTLE_MS = 180;
 const backgroundLayer = { canvas: document.createElement('canvas'), key: '' };
 const boardLayer = { canvas: document.createElement('canvas'), key: '', margin: 56 };
 
@@ -188,6 +193,7 @@ function leaveRoom() {
   state = null;
   displayPlayers.clear();
   displayBombs.clear();
+  pendingBombAnchors = [];
   releaseInputs();
   const cleanUrl = new URL(location.href);
   cleanUrl.searchParams.delete('room');
@@ -257,6 +263,17 @@ function renderLobby() {
   startButton.textContent = lobby.players.length === 1 ? 'Start training round' : 'Start match';
 }
 
+function queueLocalBombAnchor() {
+  const local = displayPlayers.get(socket.id)
+    || state?.players?.find((player) => player.id === socket.id);
+  if (!local) return;
+  const now = performance.now();
+  pendingBombAnchors = pendingBombAnchors
+    .filter((anchor) => now - anchor.createdAt < 800)
+    .slice(-2);
+  pendingBombAnchors.push({ x: local.x, y: local.y, createdAt: now });
+}
+
 function releaseInputs() {
   let changed = false;
   Object.keys(input).forEach((key) => {
@@ -281,8 +298,10 @@ window.addEventListener('keydown', (event) => {
   if (event.repeat) return;
   if (event.code === 'Space') {
     event.preventDefault();
+    queueLocalBombAnchor();
     socket.emit('action', { type: 'bomb' });
   } else if (event.code === 'KeyF') {
+    queueLocalBombAnchor();
     socket.emit('action', { type: 'mega' });
   } else if (event.code === 'KeyE') {
     socket.emit('action', { type: 'line' });
@@ -449,6 +468,94 @@ function canDisplayOccupy(x, y) {
   return true;
 }
 
+function tryDisplayCornerAssist(position, amount, axis) {
+  const perpendicularAxis = axis === 'x' ? 'y' : 'x';
+  const perpendicularValue = position[perpendicularAxis];
+  const tileCenter = Math.floor(perpendicularValue) + 0.5;
+  const centerDelta = tileCenter - perpendicularValue;
+  if (Math.abs(centerDelta) < 0.001 || Math.abs(centerDelta) > DISPLAY_CORNER_ASSIST_MAX) return false;
+
+  const nudge = Math.sign(centerDelta) * Math.min(
+    Math.abs(centerDelta),
+    Math.max(0.018, Math.min(0.055, Math.abs(amount) * 1.2)),
+  );
+  const nudgedX = perpendicularAxis === 'x' ? position.x + nudge : position.x;
+  const nudgedY = perpendicularAxis === 'y' ? position.y + nudge : position.y;
+  const finalX = axis === 'x' ? nudgedX + amount : nudgedX;
+  const finalY = axis === 'y' ? nudgedY + amount : nudgedY;
+  if (!canDisplayOccupy(nudgedX, nudgedY) || !canDisplayOccupy(finalX, finalY)) return false;
+  position.x = finalX;
+  position.y = finalY;
+  return true;
+}
+
+function tryDisplayMoveAxis(position, amount, axis) {
+  if (amount === 0) return false;
+  const nx = axis === 'x' ? position.x + amount : position.x;
+  const ny = axis === 'y' ? position.y + amount : position.y;
+  if (canDisplayOccupy(nx, ny)) {
+    position.x = nx;
+    position.y = ny;
+    return true;
+  }
+  return tryDisplayCornerAssist(position, amount, axis);
+}
+
+function predictLocalMovement(position, player, dt) {
+  let dx = Number(input.right) - Number(input.left);
+  let dy = Number(input.down) - Number(input.up);
+  if (dx === 0 && dy === 0) return false;
+  const length = Math.hypot(dx, dy) || 1;
+  dx /= length;
+  dy /= length;
+
+  const distance = Math.min(player.speed * dt, 0.16);
+  const steps = Math.max(1, Math.ceil(distance / DISPLAY_MOVE_SUBSTEP));
+  const stepX = dx * distance / steps;
+  const stepY = dy * distance / steps;
+  for (let step = 0; step < steps; step += 1) {
+    tryDisplayMoveAxis(position, stepX, 'x');
+    tryDisplayMoveAxis(position, stepY, 'y');
+  }
+  return true;
+}
+
+function reconcileDisplayPosition(existing, target, dt, movingLocally) {
+  const delta = Math.hypot(target.x - existing.x, target.y - existing.y);
+  if (delta > 0.75 || !canDisplayOccupy(existing.x, existing.y)) {
+    existing.x = target.x;
+    existing.y = target.y;
+    return;
+  }
+
+  // Keep a small prediction dead zone while a key is held. This removes the
+  // soft snapshot-following delay without allowing the rendered player to run
+  // far ahead of the authoritative server position.
+  const deadZone = movingLocally ? 0.085 : 0.025;
+  if (delta > deadZone) {
+    const rate = movingLocally ? 9 : 32;
+    const factor = 1 - Math.exp(-rate * dt);
+    const nextX = existing.x + (target.x - existing.x) * factor;
+    const nextY = existing.y + (target.y - existing.y) * factor;
+    if (canDisplayOccupy(nextX, existing.y)) existing.x = nextX;
+    if (canDisplayOccupy(existing.x, nextY)) existing.y = nextY;
+  }
+
+  const leadX = existing.x - target.x;
+  const leadY = existing.y - target.y;
+  const lead = Math.hypot(leadX, leadY);
+  if (lead > LOCAL_PREDICTION_LEAD) {
+    const scale = LOCAL_PREDICTION_LEAD / lead;
+    const clampedX = target.x + leadX * scale;
+    const clampedY = target.y + leadY * scale;
+    if (canDisplayOccupy(clampedX, existing.y)) existing.x = clampedX;
+    if (canDisplayOccupy(existing.x, clampedY)) existing.y = clampedY;
+  }
+
+  if (!movingLocally && Math.abs(target.x - existing.x) < 0.002) existing.x = target.x;
+  if (!movingLocally && Math.abs(target.y - existing.y) < 0.002) existing.y = target.y;
+}
+
 function updateDisplayPlayers(dt) {
   if (!state) return;
   const seen = new Set();
@@ -460,24 +567,30 @@ function updateDisplayPlayers(dt) {
       continue;
     }
 
-    const delta = Math.hypot(p.x - existing.x, p.y - existing.y);
-    if (!p.alive || delta > 0.9 || !canDisplayOccupy(existing.x, existing.y)) {
+    if (!p.alive) {
       existing.x = p.x;
       existing.y = p.y;
       continue;
     }
 
-    const responsiveness = p.id === socket.id ? 26 : 19;
-    const factor = 1 - Math.exp(-responsiveness * dt);
+    if (p.id === socket.id) {
+      const movingLocally = predictLocalMovement(existing, p, dt);
+      reconcileDisplayPosition(existing, p, dt, movingLocally);
+      continue;
+    }
+
+    const delta = Math.hypot(p.x - existing.x, p.y - existing.y);
+    if (delta > 0.9 || !canDisplayOccupy(existing.x, existing.y)) {
+      existing.x = p.x;
+      existing.y = p.y;
+      continue;
+    }
+
+    const factor = 1 - Math.exp(-24 * dt);
     const nextX = existing.x + (p.x - existing.x) * factor;
     const nextY = existing.y + (p.y - existing.y) * factor;
-
-    // Mirror the server's axis-separated movement. Direct diagonal interpolation
-    // can visually cut through the corner of a wall even when server collision
-    // is correct.
     if (canDisplayOccupy(nextX, existing.y)) existing.x = nextX;
     if (canDisplayOccupy(existing.x, nextY)) existing.y = nextY;
-
     if (Math.abs(p.x - existing.x) < 0.001) existing.x = p.x;
     if (Math.abs(p.y - existing.y) < 0.001) existing.y = p.y;
   }
@@ -487,16 +600,52 @@ function updateDisplayPlayers(dt) {
 function updateDisplayBombs(dt) {
   if (!state) return;
   const seen = new Set();
-  const age = Math.min(Math.max(0, performance.now() - stateReceivedAt) / 1000, 0.055);
+  const now = performance.now();
+  const age = Math.min(Math.max(0, now - stateReceivedAt) / 1000, 0.055);
+  pendingBombAnchors = pendingBombAnchors.filter((anchor) => now - anchor.createdAt < 800);
+
   for (const bomb of state.bombs) {
     seen.add(bomb.id);
     const targetX = bomb.x + (bomb.vx || 0) * age;
     const targetY = bomb.y + (bomb.vy || 0) * age;
     const existing = displayBombs.get(bomb.id);
+
     if (!existing) {
-      displayBombs.set(bomb.id, { x: targetX, y: targetY });
+      let spawnX = Number.isFinite(bomb.spawnX) ? bomb.spawnX : targetX;
+      let spawnY = Number.isFinite(bomb.spawnY) ? bomb.spawnY : targetY;
+
+      // For the local player, use the exact rendered position captured when the
+      // key was pressed. This removes the small network/interpolation offset
+      // that made newly placed bombs appear above-left while moving.
+      if (bomb.ownerId === socket.id && pendingBombAnchors.length) {
+        const anchor = pendingBombAnchors.shift();
+        spawnX = anchor.x;
+        spawnY = anchor.y;
+      }
+
+      const serverAge = Number.isFinite(bomb.placedAt)
+        ? Math.max(0, estimatedServerNow() - bomb.placedAt)
+        : BOMB_SPAWN_SETTLE_MS;
+      const progress = Math.min(1, serverAge / BOMB_SPAWN_SETTLE_MS);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      displayBombs.set(bomb.id, {
+        x: spawnX + (targetX - spawnX) * eased,
+        y: spawnY + (targetY - spawnY) * eased,
+        spawnX,
+        spawnY,
+        settleStartedAt: now - serverAge,
+      });
       continue;
     }
+
+    const settleProgress = Math.min(1, Math.max(0, now - existing.settleStartedAt) / BOMB_SPAWN_SETTLE_MS);
+    if (settleProgress < 1 && !bomb.moving) {
+      const eased = 1 - Math.pow(1 - settleProgress, 3);
+      existing.x = existing.spawnX + (targetX - existing.spawnX) * eased;
+      existing.y = existing.spawnY + (targetY - existing.spawnY) * eased;
+      continue;
+    }
+
     const delta = Math.hypot(targetX - existing.x, targetY - existing.y);
     if (delta > 1.25) {
       existing.x = targetX;
@@ -775,7 +924,9 @@ function drawPlayers(layout) {
     const display = displayPlayers.get(player.id) || player;
     const cx = ox + display.x * tile;
     const cy = oy + display.y * tile;
-    const bob = player.alive ? Math.sin(animationTime * .008 + (display.bob || 0)) * tile * .022 : 0;
+    const isMoving = Math.abs(player.moveX || 0) + Math.abs(player.moveY || 0) > 0.01;
+    const bobAmount = isMoving ? tile * .003 : tile * .007;
+    const bob = player.alive ? Math.sin(animationTime * .008 + (display.bob || 0)) * bobAmount : 0;
     const radius = tile * .28;
 
     if (!player.alive) {

@@ -17,7 +17,7 @@ A standalone, original browser game inspired by classic grid-based bomb arena pa
 - Automatic round resets, kill counts, round wins, and sudden-death arena closure
 - Responsive canvas renderer with original procedural artwork; no external game assets
 - 45 Hz authoritative simulation and 30 Hz multiplayer snapshots
-- Cached static arena rendering and collision-safe visual interpolation
+- Cached static arena rendering, immediate local movement prediction, and collision-safe reconciliation
 - Dependency-free Node.js server with a small built-in WebSocket implementation
 - Dockerfile, Render Blueprint, Railway config, shareable room links, and health endpoint
 
@@ -135,3 +135,18 @@ The prototype already validates names, limits message size, rate-limits input/ac
 - Bomb movement is server-authoritative and client-smoothed between network snapshots.
 - Lobby hosts can copy a direct invite URL containing the room code.
 - Added Render, Railway, and Procfile deployment configuration for public WebSocket hosting.
+## v1.2.1 placement fix
+
+New bombs now originate at the placing character's exact rendered position and ease into the authoritative center of the selected grid tile. This removes the slight upper-left visual offset caused by movement interpolation and network delay while preserving grid-correct collision and explosions.
+
+
+
+## Version 1.3 movement feel update
+
+- Local movement is predicted immediately instead of waiting for the next server snapshot, while the server remains authoritative.
+- Prediction is capped to a small lead and reconciled through collision-safe axis movement to prevent visible wall clipping.
+- Added server-side corner assistance: when a player only grazes a wall tip, the character is gently steered toward the corridor center and continues moving.
+- Slightly reduced the collision radius for more forgiving one-tile corridors without changing the character artwork.
+- Reduced the idle hover animation while moving so characters feel grounded rather than floaty.
+- Rapid direction-change packets are no longer discarded, so quick turns register immediately.
+- Remote-player smoothing was tightened to make other players appear more responsive.

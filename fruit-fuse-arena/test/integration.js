@@ -43,7 +43,8 @@ async function run() {
     await waitForServer(child);
     const health = await fetch(`http://127.0.0.1:${port}/health`).then((response) => response.json());
     if (!health.ok || health.tickRate !== 45 || health.snapshotRate !== 30
-      || health.startingRange !== 1 || health.powerupDropChance !== 0.28 || health.kickSlideTiles !== 4) {
+      || health.startingRange !== 1 || health.powerupDropChance !== 0.28 || health.kickSlideTiles !== 4
+      || health.cornerAssist !== 0.26) {
       throw new Error('Health check or gameplay configuration failed');
     }
 
@@ -58,6 +59,7 @@ async function run() {
       let turnSent = false;
       let stopSent = false;
       let bombSeen = false;
+      let bombSpawnMetadataChecked = false;
       let bombExpired = false;
       let maxBetaX = 0;
       let maxBetaY = 0;
@@ -66,6 +68,13 @@ async function run() {
       let kickBombStartX = null;
       let kickBombMaxX = 0;
       let kickSawFractionalX = false;
+      let kickComplete = false;
+      let cornerPrepared = false;
+      let cornerStartedAt = 0;
+      let cornerMaxX = 0;
+      let cornerMinY = Infinity;
+      let rapidTurnPrepared = false;
+      let rapidTurnStartedAt = 0;
       let finished = false;
       const timeout = setTimeout(() => reject(new Error('Multiplayer flow timed out')), 9000);
       const send = (socket, event, data = {}) => socket.send(JSON.stringify({ event, data }));
@@ -131,6 +140,19 @@ async function run() {
         }
 
         const elapsed = Date.now() - controlsSentAt;
+        if (!bombSpawnMetadataChecked && snapshot.bombs.length > 0) {
+          const placedBomb = snapshot.bombs[0];
+          if (!Number.isFinite(placedBomb.spawnX) || !Number.isFinite(placedBomb.spawnY)
+            || !Number.isFinite(placedBomb.placedAt)) {
+            fail(new Error('Bomb placement anchor metadata was missing'));
+            return;
+          }
+          if (Math.hypot(placedBomb.spawnX - 1.5, placedBomb.spawnY - 1.5) > 0.12) {
+            fail(new Error(`Bomb did not originate beneath the placing player (${placedBomb.spawnX}, ${placedBomb.spawnY})`));
+            return;
+          }
+          bombSpawnMetadataChecked = true;
+        }
         bombSeen ||= snapshot.bombs.length > 0;
         if (bombSeen && snapshot.bombs.length === 0) bombExpired = true;
         maxBetaX = Math.max(maxBetaX, betaPlayer.x);
@@ -172,7 +194,44 @@ async function run() {
           return;
         }
 
-        if (kickPrepared) {
+        if (rapidTurnPrepared) {
+          if (Date.now() - rapidTurnStartedAt >= 450) {
+            send(alpha, 'input', { up: false, down: false, left: false, right: false });
+            if (alphaPlayer.y < 6.25 || Math.abs(alphaPlayer.x - 5.5) > 0.2) {
+              fail(new Error(`Rapid input replacement failed at ${alphaPlayer.x.toFixed(3)}, ${alphaPlayer.y.toFixed(3)}`));
+              return;
+            }
+            finish();
+          }
+          return;
+        }
+
+        if (cornerPrepared) {
+          cornerMaxX = Math.max(cornerMaxX, alphaPlayer.x);
+          cornerMinY = Math.min(cornerMinY, alphaPlayer.y);
+          if (Date.now() - cornerStartedAt >= 900) {
+            send(alpha, 'input', { up: false, down: false, left: false, right: false });
+            if (cornerMaxX < 2.65) {
+              fail(new Error(`Corner assist did not carry the player around the wall tip (max x ${cornerMaxX.toFixed(3)})`));
+              return;
+            }
+            if (cornerMinY > 1.73) {
+              fail(new Error(`Corner assist did not steer toward the corridor center (min y ${cornerMinY.toFixed(3)})`));
+              return;
+            }
+            cornerPrepared = false;
+            rapidTurnPrepared = true;
+            rapidTurnStartedAt = Date.now();
+            send(alpha, 'action', { type: 'testPrepareRapidTurn' });
+            setTimeout(() => {
+              send(alpha, 'input', { up: false, down: false, left: false, right: true });
+              send(alpha, 'input', { up: false, down: true, left: false, right: false });
+            }, 90);
+          }
+          return;
+        }
+
+        if (kickPrepared && !kickComplete) {
           const kickBomb = snapshot.bombs[0];
           if (kickBomb) {
             if (kickBombStartX === null) kickBombStartX = kickBomb.x;
@@ -192,7 +251,11 @@ async function run() {
               fail(new Error('Kicked bomb did not expose smooth intermediate positions'));
               return;
             }
-            finish();
+            kickComplete = true;
+            cornerPrepared = true;
+            cornerStartedAt = Date.now();
+            send(alpha, 'action', { type: 'testPrepareCorner' });
+            setTimeout(() => send(alpha, 'input', { up: false, down: false, left: false, right: true }), 90);
           }
         }
       };
@@ -211,7 +274,7 @@ async function run() {
       beta.onerror = fail;
     });
 
-    console.log('Integration test passed: multiplayer sync, radius 1, spawn escape, border collision, and smooth multi-tile kicking.');
+    console.log('Integration test passed: centered bomb placement, multiplayer sync, radius 1, spawn escape, border collision, smooth multi-tile kicking, corner assistance, and rapid direction changes.');
   } finally {
     child.kill('SIGTERM');
   }

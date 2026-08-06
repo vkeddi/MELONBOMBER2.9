@@ -17,7 +17,7 @@ const ROUND_RESET_MS = 3500;
 const TRAINING_RESET_MS = 1200;
 const SPAWN_CLEAR_RADIUS = 3;
 const SUDDEN_DEATH_MS = 90000;
-const PLAYER_RADIUS = 0.29;
+const PLAYER_RADIUS = 0.28;
 const BOMB_RADIUS = 0.31;
 const KICK_SLIDE_TILES = 4;
 const KICK_SLIDE_SPEED = 7.4;
@@ -26,6 +26,8 @@ const TEST_MODE = process.env.NODE_ENV === 'test' || process.env.FFA_TEST_MODE =
 const MAX_BOMB_MOVE_SUBSTEP = 0.065;
 const MAX_MOVE_SUBSTEP = 0.065;
 const MAX_TICK_MOVEMENT = 0.32;
+const CORNER_ASSIST_MAX = 0.26;
+const CORNER_ASSIST_STEP = 0.055;
 const COLORS = ['#ff5d73', '#55d6be', '#ffd166', '#7aa2ff', '#c77dff', '#ff9f1c', '#80ed99', '#f15bb5'];
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -54,6 +56,7 @@ const server = http.createServer((req, res) => {
       startingRange: 1,
       powerupDropChance: POWERUP_DROP_CHANCE,
       kickSlideTiles: KICK_SLIDE_TILES,
+      cornerAssist: CORNER_ASSIST_MAX,
     }));
     return;
   }
@@ -296,6 +299,8 @@ function createGame(room) {
       facingX: 0,
       facingY: 1,
       kickCooldownUntil: 0,
+      moveX: 0,
+      moveY: 0,
       kills: 0,
     };
     room.inputs.set(p.id, { up: false, down: false, left: false, right: false });
@@ -462,14 +467,41 @@ function moveKickedBombs(game, dt) {
   }
 }
 
+function tryCornerAssist(game, player, amount, axis) {
+  const perpendicularAxis = axis === 'x' ? 'y' : 'x';
+  const perpendicularValue = player[perpendicularAxis];
+  const tileCenter = Math.floor(perpendicularValue) + 0.5;
+  const centerDelta = tileCenter - perpendicularValue;
+  if (Math.abs(centerDelta) < 0.001 || Math.abs(centerDelta) > CORNER_ASSIST_MAX) return false;
+
+  // When the player's circle only clips the tip of a wall, steer toward the
+  // center of the current corridor and retry the requested movement. The
+  // correction is intentionally small and only commits when forward progress
+  // is possible, so holding into a flat wall never drifts the player sideways.
+  const nudge = Math.sign(centerDelta) * Math.min(
+    Math.abs(centerDelta),
+    Math.max(0.018, Math.min(CORNER_ASSIST_STEP, Math.abs(amount) * 1.2)),
+  );
+  const nudgedX = perpendicularAxis === 'x' ? player.x + nudge : player.x;
+  const nudgedY = perpendicularAxis === 'y' ? player.y + nudge : player.y;
+  const finalX = axis === 'x' ? nudgedX + amount : nudgedX;
+  const finalY = axis === 'y' ? nudgedY + amount : nudgedY;
+  if (!canOccupy(game, nudgedX, nudgedY, player.id)
+    || !canOccupy(game, finalX, finalY, player.id)) return false;
+
+  player.x = finalX;
+  player.y = finalY;
+  return true;
+}
+
 function tryMoveAxis(game, player, amount, axis, now) {
-  if (amount === 0) return;
+  if (amount === 0) return false;
   const nx = axis === 'x' ? player.x + amount : player.x;
   const ny = axis === 'y' ? player.y + amount : player.y;
   if (canOccupy(game, nx, ny, player.id)) {
     player.x = nx;
     player.y = ny;
-    return;
+    return true;
   }
 
   const kicked = tryKickBomb(
@@ -482,16 +514,25 @@ function tryMoveAxis(game, player, amount, axis, now) {
   if (kicked && canOccupy(game, nx, ny, player.id)) {
     player.x = nx;
     player.y = ny;
+    return true;
   }
+
+  return tryCornerAssist(game, player, amount, axis);
 }
 
 function movePlayer(room, player, input, dt, now) {
   let dx = Number(input.right) - Number(input.left);
   let dy = Number(input.down) - Number(input.up);
-  if (dx === 0 && dy === 0) return;
+  if (dx === 0 && dy === 0) {
+    player.moveX = 0;
+    player.moveY = 0;
+    return;
+  }
   const length = Math.hypot(dx, dy) || 1;
   dx /= length;
   dy /= length;
+  player.moveX = dx;
+  player.moveY = dy;
   if (Math.abs(dx) > Math.abs(dy)) {
     player.facingX = Math.sign(dx);
     player.facingY = 0;
@@ -532,13 +573,19 @@ function placeSingleBomb(room, player, tx, ty, options = {}) {
   if (useMega) player.megaCharges -= 1;
 
   const id = String(game.nextBombId++);
+  const placedAt = Date.now();
   game.bombs[id] = {
     id,
     ownerId: player.id,
     tx,
     ty,
+    // Gameplay remains locked to the grid center, but retain the exact player
+    // position so clients can animate the bomb out from under the character.
     x: tx + 0.5,
     y: ty + 0.5,
+    spawnX: player.x,
+    spawnY: player.y,
+    placedAt,
     moving: false,
     moveX: 0,
     moveY: 0,
@@ -548,7 +595,7 @@ function placeSingleBomb(room, player, tx, ty, options = {}) {
     mega: useMega,
     piercing: player.piercing,
     remote: player.remote,
-    explodeAt: player.remote ? null : Date.now() + BOMB_FUSE_MS,
+    explodeAt: player.remote ? null : placedAt + BOMB_FUSE_MS,
     passableFor: Object.values(game.players)
       .filter((p) => p.alive && Math.floor(p.x) === tx && Math.floor(p.y) === ty)
       .map((p) => p.id),
@@ -794,6 +841,8 @@ function snapshot(room, now) {
       bombsPlaced: p.bombsPlaced,
       range: p.range,
       speed: p.speed,
+      moveX: p.moveX || 0,
+      moveY: p.moveY || 0,
       kick: p.kick,
       remote: p.remote,
       piercing: p.piercing,
@@ -807,6 +856,9 @@ function snapshot(room, now) {
       ownerId: b.ownerId,
       x: b.x,
       y: b.y,
+      spawnX: b.spawnX,
+      spawnY: b.spawnY,
+      placedAt: b.placedAt,
       vx: b.moving ? b.moveX * KICK_SLIDE_SPEED : 0,
       vy: b.moving ? b.moveY * KICK_SLIDE_SPEED : 0,
       moving: b.moving,
@@ -931,9 +983,10 @@ function handleClientEvent(socket, event, data) {
     return;
   }
   if (event === 'input') {
-    const now = Date.now();
-    if (now - socket.data.lastInputAt < 15) return;
-    socket.data.lastInputAt = now;
+    // Input packets are tiny state replacements. Never discard a rapid key-up /
+    // key-down pair: dropping the second packet makes turns feel delayed until
+    // the client's periodic resend arrives.
+    socket.data.lastInputAt = Date.now();
     const room = getRoomForSocket(socket);
     if (!room) return;
     room.inputs.set(socket.id, {
@@ -962,6 +1015,36 @@ function handleClientEvent(socket, event, data) {
         if (getCell(room.game, x, 5) !== 1) setCell(room.game, x, 5, 0);
       }
       placeSingleBomb(room, player, 2, 5, { mega: false });
+      return;
+    }
+    if (TEST_MODE && data.type === 'testPrepareCorner') {
+      const player = room.game?.players[socket.id];
+      if (!player?.alive) return;
+      room.game.bombs = {};
+      room.game.flames = [];
+      player.bombsPlaced = 0;
+      player.kick = false;
+      player.x = 1.5;
+      player.y = 1.75;
+      player.moveX = 0;
+      player.moveY = 0;
+      player.facingX = 1;
+      player.facingY = 0;
+      for (let x = 1; x <= 4; x += 1) setCell(room.game, x, 1, 0);
+      setCell(room.game, 2, 2, 1);
+      return;
+    }
+    if (TEST_MODE && data.type === 'testPrepareRapidTurn') {
+      const player = room.game?.players[socket.id];
+      if (!player?.alive) return;
+      room.game.bombs = {};
+      room.game.flames = [];
+      player.x = 5.5;
+      player.y = 5.5;
+      player.moveX = 0;
+      player.moveY = 0;
+      for (let x = 4; x <= 8; x += 1) setCell(room.game, x, 5, 0);
+      for (let y = 4; y <= 8; y += 1) setCell(room.game, 5, y, 0);
       return;
     }
     if (data.type === 'bomb') placeBomb(room, socket.id, 'normal');
