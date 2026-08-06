@@ -66,6 +66,9 @@ const mapVoteCountdown = document.getElementById('mapVoteCountdown');
 const leaveGame = document.getElementById('leaveGame');
 const scoreboard = document.getElementById('scoreboard');
 const powerHud = document.getElementById('powerHud');
+const graphicsMode = document.getElementById('graphicsMode');
+const requestedRenderer = new URLSearchParams(location.search).get('renderer');
+const useExperimentalWebGL = requestedRenderer !== 'stable';
 const hudRoom = document.getElementById('hudRoom');
 const hudRound = document.getElementById('hudRound');
 const hudTimer = document.getElementById('hudTimer');
@@ -80,6 +83,7 @@ const confettiCanvas = document.getElementById('confettiCanvas');
 const confettiCtx = confettiCanvas.getContext('2d');
 const versionNumber = document.getElementById('versionNumber');
 if (versionNumber) versionNumber.textContent = window.FRUIT_FUSE_VERSION || 'dev';
+if (graphicsMode) graphicsMode.textContent = useExperimentalWebGL ? '3D' : 'STABLE';
 
 nameInput.value = localStorage.getItem('ffa-name') || '';
 const inviteCode = (new URLSearchParams(location.search).get('room') || '')
@@ -272,21 +276,25 @@ function showScreen(name) {
   Object.entries(screens).forEach(([key, element]) => element.classList.toggle('active', key === name));
 }
 
-function activateCompatibilityRenderer(reason = '') {
-  if (compatibilityRendererActive) return;
+function activateCompatibilityRenderer(reason = '', announce = true) {
   compatibilityRendererActive = true;
   rendererRuntimeFailed = true;
+  if (graphicsMode) graphicsMode.textContent = 'STABLE';
   canvas?.classList.add('hidden');
   fallbackCanvas?.classList.remove('hidden');
   worldLabels?.classList.add('hidden');
   screens.game?.classList.add('compatibility-mode');
   if (renderNotice) renderNotice.classList.add('hidden');
-  if (!compatibilityNoticeShown) {
+  if (announce && !compatibilityNoticeShown) {
     compatibilityNoticeShown = true;
-    showToast('3D display recovery enabled — gameplay remains fully active', '#ffd166');
+    showToast('Stable graphics mode enabled', '#b7ef4a');
   }
-  if (reason) console.warn('Using compatibility renderer:', reason);
+  if (reason) console.warn('Using stable software renderer:', reason);
 }
+
+// The 3D renderer is the default. Add ?renderer=stable to force the software
+// renderer on older or restricted graphics hardware.
+if (!useExperimentalWebGL) activateCompatibilityRenderer('', false);
 
 function renderCompatibilityFrame(width, height) {
   if (!ctx || !state) return;
@@ -422,9 +430,19 @@ socket.on('mapVoteStarted', () => {
 });
 
 socket.on('gameStarted', ({ round, mapName }) => {
-  if (!compatibilityRendererActive) rendererRuntimeFailed = false;
-  if (renderNotice && window.FFA3D?.available) renderNotice.classList.add('hidden');
-  window.FFA3D?.resetRound();
+  if (useExperimentalWebGL) {
+    compatibilityRendererActive = false;
+    rendererRuntimeFailed = false;
+    if (graphicsMode) graphicsMode.textContent = '3D';
+    canvas?.classList.remove('hidden');
+    fallbackCanvas?.classList.add('hidden');
+    worldLabels?.classList.remove('hidden');
+    screens.game?.classList.remove('compatibility-mode');
+    if (renderNotice && window.FFA3D?.available) renderNotice.classList.add('hidden');
+    window.FFA3D?.resetRound();
+  } else {
+    activateCompatibilityRenderer('', false);
+  }
   showScreen('game');
   mapVoteOverlay.classList.add('hidden');
   roundBanner.classList.add('hidden');

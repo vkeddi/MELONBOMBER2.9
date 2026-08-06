@@ -1,0 +1,9 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
+assert.match(css, /#app\s*\{[^}]*height:\s*100%/s, 'app root must fill the viewport');
+assert.match(css, /\.game-screen\s*\{[^}]*height:\s*100vh/s, 'game screen must have a viewport height');
+assert.match(css, /\.game-screen\s*\{[^}]*min-height:\s*100dvh/s, 'game screen must support dynamic viewport height');
+console.log('Layout test passed: the gameplay canvas cannot collapse to zero height.');

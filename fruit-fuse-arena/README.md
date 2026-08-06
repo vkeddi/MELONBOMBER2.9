@@ -1,4 +1,4 @@
-## Version 2.0.3 version display update
+## Version 2.0.4 version display update
 
 - Added a small version number that remains visible on the menu, lobby, and game screens.
 - The displayed version, health endpoint, startup log, and package metadata all use the same centralized package version.
@@ -202,6 +202,16 @@ New bombs now originate at the placing character's exact rendered position and e
 - Added a synthesized round-end sound without requiring external audio files.
 - The round winner receives a local confetti celebration visible only on their screen.
 
-## Display recovery in 2.0.3
+## Display recovery in 2.0.4
 
-Some browsers can keep the multiplayer simulation and audio running while silently failing to present a WebGL frame. Version 2.0.3 prefers the broadly compatible WebGL 1 path, checks that the first gameplay frames contain visible pixels, detects WebGL context loss/errors, and automatically switches to a full 2D compatibility view if the 3D canvas remains blank. Gameplay and networking continue without restarting the round.
+Some browsers can keep the multiplayer simulation and audio running while silently failing to present a WebGL frame. Version 2.0.4 prefers the broadly compatible WebGL 1 path, checks that the first gameplay frames contain visible pixels, detects WebGL context loss/errors, and automatically switches to a full 2D compatibility view if the 3D canvas remains blank. Gameplay and networking continue without restarting the round.
+
+
+## Graphics modes
+
+Version 2.0.4 uses the overhead 3D renderer by default. Add `?renderer=stable` to the game URL to force the software renderer on restricted graphics hardware.
+
+
+### 2.0.4 display fix
+
+The game root and gameplay screen now explicitly fill the browser viewport. This prevents the active 3D canvas from collapsing to zero height when a round begins.
