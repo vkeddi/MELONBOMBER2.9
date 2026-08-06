@@ -1,14 +1,14 @@
 {
   "name": "fruit-fuse-arena",
-  "version": "2.0.4",
+  "version": "2.1.0",
   "private": true,
   "description": "Standalone online multiplayer 3D overhead grid-bomb arena game inspired by classic party bombers.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check public/renderer3d.js && node --check public/client.js",
-    "test": "node test/layout.js && node test/renderer-runtime.js && node test/integration.js"
+    "check": "node --check server.js && node --check public/menu-demo.js && node --check public/renderer3d.js && node --check public/client.js",
+    "test": "node test/layout.js && node test/renderer-runtime.js && node test/integration.js && node test/bots-overtime.js"
   },
   "engines": {
     "node": ">=20"

@@ -216,10 +216,10 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
     woodDark: '#65381e',
     danger: '#5a1730',
     dangerGlow: '#ff4b72',
-    bomb: '#24643a',
-    bombStripe: '#9adf54',
-    mega: '#ae1f43',
-    megaStripe: '#ff7b93',
+    bomb: '#111419',
+    bombStripe: '#343b43',
+    mega: '#15171c',
+    megaStripe: '#b52d45',
     fuse: '#5f3a20',
     spark: '#ffd76a',
     flame: '#ff8a23',
@@ -792,19 +792,38 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
       const color = POWER_COLORS[item.type] || POWER_COLORS.range;
       const bob = .48 + Math.sin(now * .0045 + item.x * .7 + item.y) * .08;
       drawShadow(x, z, .34, .18);
-      draw('cylinder', [x, .10, z], [.48, .10, .48], '#17202c', [0, 0, 0], { shine: .45 });
-      draw('torus', [x, .19, z], [.58, .58, .58], color, [0, now * .0015, 0], {
-        emissive: shade(color, -.28),
-        alpha: .72,
-        blend: true,
-        additive: true,
+      draw('cylinder', [x, .10, z], [.48, .10, .48], '#20262d', [0, 0, 0], { shine: .62 });
+      draw('torus', [x, .18, z], [.54, .54, .54], color, [0, now * .0011, 0], {
+        emissive: shade(color, -.62), alpha: .42, blend: true, unlit: true,
       });
-      const mesh = item.type === 'bomb' ? 'sphere' : item.type === 'kick' ? 'cube' : 'octahedron';
-      const scale = item.type === 'kick' ? [.38, .22, .52] : [.48, .62, .48];
-      draw(mesh, [x, bob, z], scale, color, [now * .0012, now * .0018, 0], {
-        emissive: shade(color, -.12),
-        shine: .75,
-      });
+      if (item.type === 'bomb' || item.type === 'mega') {
+        const scale = item.type === 'mega' ? .45 : .38;
+        draw('sphere', [x, bob, z], [scale, scale, scale], COLORS.bomb, [0, now * .0008, 0], { shine: .88 });
+        draw('cylinder', [x, bob + scale * .76, z], [.095, .13, .095], '#656d75', [0, 0, 0], { shine: .92 });
+        if (item.type === 'mega') {
+          draw('torus', [x, bob, z], [scale * 1.02, scale * 1.02, scale * 1.02], COLORS.megaStripe, [Math.PI / 2, 0, 0], { shine: .55 });
+        }
+      } else if (item.type === 'speed' || item.type === 'kick') {
+        const bootColor = item.type === 'kick' ? '#315f9c' : '#356b54';
+        draw('cube', [x + .05, bob - .04, z + .04], [.43, .19, .29], bootColor, [0, -.35, 0], { shine: .34 });
+        draw('cube', [x - .10, bob + .15, z - .02], [.20, .32, .25], shade(bootColor, -.22), [0, -.35, 0], { shine: .28 });
+        draw('cube', [x + .17, bob - .13, z + .02], [.28, .07, .33], '#1b2026', [0, -.35, 0], { shine: .18 });
+      } else if (item.type === 'remote') {
+        draw('cube', [x, bob, z], [.34, .45, .18], '#252a31', [.12, now * .0008, 0], { shine: .72 });
+        draw('sphere', [x, bob + .13, z + .20], [.075, .075, .045], '#b52d45', [0, 0, 0], { emissive: '#4b0d19', shine: .8 });
+        draw('cylinder', [x + .20, bob + .36, z], [.025, .30, .025], '#8b9298', [0, 0, -.22], { shine: .95 });
+      } else if (item.type === 'piercing') {
+        draw('cone', [x, bob, z], [.30, .64, .30], '#aeb7bf', [0, 0, Math.PI / 2], { shine: .95 });
+        draw('cylinder', [x - .28, bob, z], [.20, .20, .20], '#3a424a', [0, 0, Math.PI / 2], { shine: .55 });
+      } else if (item.type === 'line') {
+        for (let offset = -1; offset <= 1; offset += 1) {
+          draw('sphere', [x + offset * .28, bob, z], [.20, .20, .20], COLORS.bomb, [0, 0, 0], { shine: .82 });
+          draw('cylinder', [x + offset * .28, bob + .17, z], [.035, .08, .035], '#6b7177', [0, 0, 0], { shine: .8 });
+        }
+      } else {
+        draw('cylinder', [x, bob, z], [.26, .54, .26], '#41484e', [0, now * .0007, 0], { shine: .76 });
+        draw('cone', [x, bob + .42, z], [.30, .42, .30], color, [0, now * .0011, 0], { emissive: shade(color, -.48), shine: .62 });
+      }
     }
   }
 
@@ -830,6 +849,7 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
         shine: .4,
       });
       draw('cylinder', [x + .04, .84, z - .01], [.065, .34, .065], COLORS.fuse, [0, 0, -.28]);
+      draw('cylinder', [x, .78, z], [.14, .13, .14], '#626a72', [0, 0, 0], { shine: .92 });
       const sparkColor = bomb.remote ? POWER_COLORS.remote : COLORS.spark;
       const sparkPulse = .13 + urgency * .12 + Math.sin(now * .025) * .025;
       draw('sphere', [x + .13, 1.02, z - .01], [sparkPulse, sparkPulse, sparkPulse], sparkColor, [0, 0, 0], {
@@ -843,10 +863,17 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
   }
 
   function movementAngle(player) {
-    const x = player.moveX || 0;
-    const y = player.moveY || 0;
-    if (Math.abs(x) + Math.abs(y) < .01) return 0;
+    const movingX = player.moveX || 0;
+    const movingY = player.moveY || 0;
+    const x = Math.abs(movingX) + Math.abs(movingY) >= .01 ? movingX : (player.facingX || 0);
+    const y = Math.abs(movingX) + Math.abs(movingY) >= .01 ? movingY : (player.facingY || 1);
     return Math.atan2(x, y);
+  }
+
+  function orientedOffset(turn, localX, localZ) {
+    const cosine = Math.cos(turn);
+    const sine = Math.sin(turn);
+    return [localX * cosine + localZ * sine, -localX * sine + localZ * cosine];
   }
 
   function drawPlayerCharacter(player, display, state, now) {
@@ -877,17 +904,23 @@ ${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
     const turn = movementAngle(player);
     const bodyY = .48 + bob;
     draw('sphere', [x, bodyY, z], [.68, .72, .68], bodyColor, [0, turn, 0], { shine: .68 });
-    draw('sphere', [x - .13, bodyY + .13, z + .285], [.11, .15, .075], COLORS.white, [0, 0, 0], { shine: .9 });
-    draw('sphere', [x + .13, bodyY + .13, z + .285], [.11, .15, .075], COLORS.white, [0, 0, 0], { shine: .9 });
-    draw('sphere', [x - .13, bodyY + .13, z + .333], [.047, .065, .035], COLORS.black, [0, 0, 0], { shine: .25 });
-    draw('sphere', [x + .13, bodyY + .13, z + .333], [.047, .065, .035], COLORS.black, [0, 0, 0], { shine: .25 });
+    const leftEye = orientedOffset(turn, -.13, .285);
+    const rightEye = orientedOffset(turn, .13, .285);
+    const leftPupil = orientedOffset(turn, -.13, .333);
+    const rightPupil = orientedOffset(turn, .13, .333);
+    draw('sphere', [x + leftEye[0], bodyY + .13, z + leftEye[1]], [.11, .15, .075], COLORS.white, [0, turn, 0], { shine: .9 });
+    draw('sphere', [x + rightEye[0], bodyY + .13, z + rightEye[1]], [.11, .15, .075], COLORS.white, [0, turn, 0], { shine: .9 });
+    draw('sphere', [x + leftPupil[0], bodyY + .13, z + leftPupil[1]], [.047, .065, .035], COLORS.black, [0, turn, 0], { shine: .25 });
+    draw('sphere', [x + rightPupil[0], bodyY + .13, z + rightPupil[1]], [.047, .065, .035], COLORS.black, [0, turn, 0], { shine: .25 });
     draw('cylinder', [x, bodyY + .46, z], [.055, .22, .055], '#5c3a21', [0, 0, -.2]);
     draw('lowSphere', [x + .16, bodyY + .55, z], [.42, .12, .22], COLORS.leafLight, [0, -.55, .25], { shine: .16 });
     draw('lowSphere', [x - .09, bodyY + .55, z - .02], [.34, .10, .18], COLORS.leaf, [0, .7, -.2], { shine: .16 });
     if (moving) {
       const stride = Math.sin(now * .016) * .12;
-      draw('sphere', [x - .23, .15 + Math.max(0, stride), z + .06], [.22, .18, .28], shade(bodyColor, -.35), [0, turn, 0], { shine: .2 });
-      draw('sphere', [x + .23, .15 + Math.max(0, -stride), z + .06], [.22, .18, .28], shade(bodyColor, -.35), [0, turn, 0], { shine: .2 });
+      const leftFoot = orientedOffset(turn, -.23, .06);
+      const rightFoot = orientedOffset(turn, .23, .06);
+      draw('sphere', [x + leftFoot[0], .15 + Math.max(0, stride), z + leftFoot[1]], [.22, .18, .28], shade(bodyColor, -.35), [0, turn, 0], { shine: .2 });
+      draw('sphere', [x + rightFoot[0], .15 + Math.max(0, -stride), z + rightFoot[1]], [.22, .18, .28], shade(bodyColor, -.35), [0, turn, 0], { shine: .2 });
     }
   }
 

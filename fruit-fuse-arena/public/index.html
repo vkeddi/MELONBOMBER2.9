@@ -10,6 +10,8 @@
 <body>
   <main id="app">
     <section id="menuScreen" class="screen active">
+      <canvas id="menuDemoCanvas" class="menu-demo-canvas" aria-hidden="true"></canvas>
+      <div class="menu-demo-scrim" aria-hidden="true"></div>
       <div class="menu-shell">
         <div class="brand-card">
           <div class="brand-fruit" aria-hidden="true"><span></span></div>
@@ -50,6 +52,10 @@
               <span id="playerCount">0 / 8</span>
             </div>
             <div id="playerList" class="player-list"></div>
+          <div id="botControls" class="bot-controls hidden">
+            <button id="addBotButton" type="button">Add bot</button>
+            <span>Bots use the same bombs, upgrades, and collision rules.</span>
+          </div>
           </div>
 
           <div class="panel rules-panel">
@@ -129,6 +135,7 @@
   </div>
 
   <script src="/version.js"></script>
+  <script src="/menu-demo.js"></script>
   <script src="/renderer3d.js"></script>
   <script src="/client.js"></script>
 </body>

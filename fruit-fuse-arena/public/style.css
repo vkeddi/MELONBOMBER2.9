@@ -36,6 +36,14 @@ button { cursor: pointer; }
 .screen { display: none; width: 100%; height: 100%; }
 .screen.active { display: grid; }
 #menuScreen, #lobbyScreen { place-items: center; padding: 30px; overflow: auto; }
+#menuScreen { position: relative; isolation: isolate; background: #050b10; }
+.menu-demo-canvas { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; pointer-events: none; }
+.menu-demo-scrim {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background:
+    radial-gradient(circle at 48% 42%, rgba(3, 9, 13, .22), rgba(3, 8, 12, .68) 72%),
+    linear-gradient(90deg, rgba(3, 9, 13, .58), rgba(3, 9, 13, .30) 48%, rgba(3, 9, 13, .66));
+}
 
 .panel {
   background: var(--panel);
@@ -46,6 +54,8 @@ button { cursor: pointer; }
 }
 
 .menu-shell {
+  position: relative;
+  z-index: 2;
   width: min(980px, 100%);
   display: grid;
   grid-template-columns: 1.25fr 0.9fr;
@@ -60,7 +70,7 @@ button { cursor: pointer; }
   overflow: hidden;
   border-radius: 28px;
   background:
-    linear-gradient(145deg, rgba(26, 33, 62, 0.96), rgba(15, 19, 35, 0.96)),
+    linear-gradient(145deg, rgba(26, 33, 62, 0.94), rgba(15, 19, 35, 0.95)),
     #151a30;
   border: 1px solid rgba(255,255,255,.12);
   box-shadow: var(--shadow);
@@ -111,7 +121,7 @@ h1 span { color: var(--lime); }
   transform: rotate(-26deg);
 }
 
-.menu-panel { padding: 34px; align-self: center; }
+.menu-panel { padding: 34px; align-self: center; background: rgba(8, 18, 25, .91); border-color: rgba(205, 244, 181, .20); }
 .menu-panel label { display: block; margin-bottom: 9px; color: var(--muted); font-size: 13px; font-weight: 700; }
 input {
   width: 100%; height: 52px; padding: 0 16px;
@@ -150,6 +160,11 @@ button.danger { color: #ff9aaa; border-color: rgba(255,93,115,.25); }
 .player-card { display: flex; align-items: center; gap: 12px; padding: 13px; background: rgba(7,10,20,.55); border: 1px solid rgba(255,255,255,.07); border-radius: 14px; }
 .player-dot { width: 34px; height: 34px; border-radius: 50%; box-shadow: inset -5px -6px 0 rgba(0,0,0,.18); }
 .player-card strong { flex: 1; }
+.bot-badge { padding: 4px 7px; color: #dfffc0; background: rgba(108, 190, 85, .17); border: 1px solid rgba(168,236,98,.24); border-radius: 999px; font-size: 9px; font-weight: 900; letter-spacing: .08em; }
+.remove-bot { width: 30px; min-width: 30px; height: 30px; padding: 0; color: #ff9aaa; background: rgba(255,93,115,.08); border-color: rgba(255,93,115,.20); border-radius: 9px; }
+.bot-controls { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.bot-controls button { height: 38px; color: #101608; background: var(--lime); }
+.bot-controls span { color: var(--muted); font-size: 11px; line-height: 1.35; }
 .host-badge { padding: 4px 8px; color: #151b09; background: var(--lime); border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: .08em; }
 .rule { display: flex; align-items: center; gap: 12px; margin: 13px 0; }
 kbd { min-width: 64px; padding: 7px 9px; color: #d8ddef; background: #0a0d18; border: 1px solid #353b54; border-bottom-width: 3px; border-radius: 7px; text-align: center; font-size: 11px; font-weight: 900; }
@@ -552,4 +567,23 @@ button.map-option.selected {
   pointer-events: none;
   user-select: none;
   backdrop-filter: blur(8px);
+}
+
+/* v2.1 homepage demo and bot controls */
+#menuScreen .menu-shell { position: relative; z-index: 2; }
+#menuScreen .brand-card {
+  background: linear-gradient(145deg, rgba(8, 24, 31, .88), rgba(3, 12, 20, .92));
+  backdrop-filter: blur(8px) saturate(1.08);
+}
+#menuScreen .menu-panel {
+  background: linear-gradient(145deg, rgba(10, 27, 34, .94), rgba(3, 12, 20, .96));
+  backdrop-filter: blur(18px) saturate(1.12);
+  box-shadow: 0 28px 90px rgba(0,0,0,.62), inset 0 1px rgba(255,255,255,.05);
+}
+#menuScreen h1, #menuScreen .tagline, #menuScreen label, #menuScreen button, #menuScreen input {
+  text-shadow: 0 2px 12px rgba(0,0,0,.5);
+}
+@media (max-width: 760px) {
+  .menu-demo-scrim { background: rgba(3, 9, 13, .72); }
+  .bot-controls { align-items: flex-start; flex-direction: column; }
 }

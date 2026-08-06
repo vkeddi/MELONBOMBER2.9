@@ -57,6 +57,8 @@ const copyInvite = document.getElementById('copyInvite');
 const leaveLobby = document.getElementById('leaveLobby');
 const startButton = document.getElementById('startButton');
 const waitingText = document.getElementById('waitingText');
+const botControls = document.getElementById('botControls');
+const addBotButton = document.getElementById('addBotButton');
 const playerList = document.getElementById('playerList');
 const playerCount = document.getElementById('playerCount');
 const mapVoteOptions = document.getElementById('mapVoteOptions');
@@ -528,16 +530,24 @@ function renderLobby() {
     <div class="player-card">
       <span class="player-dot" style="background:${player.color}"></span>
       <strong>${escapeHtml(player.name)}${player.id === socket.id ? ' (you)' : ''}</strong>
-      <span class="latency-badge">${latencyLabel(player.latencyMs)}</span>
+      ${player.isBot ? '<span class="bot-badge">BOT</span>' : `<span class="latency-badge">${latencyLabel(player.latencyMs)}</span>`}
       ${player.id === lobby.hostId ? '<span class="host-badge">HOST</span>' : ''}
+      ${player.isBot && lobby.hostId === socket.id ? `<button type="button" class="remove-bot" data-remove-bot="${escapeHtml(player.id)}" title="Remove ${escapeHtml(player.name)}">×</button>` : ''}
     </div>
   `).join('');
   renderMapVotes();
   const isHost = lobby.hostId === socket.id;
   startButton.classList.toggle('hidden', !isHost);
   waitingText.classList.toggle('hidden', isHost);
+  botControls?.classList.toggle('hidden', !isHost || lobby.players.length >= 8);
   startButton.textContent = lobby.players.length === 1 ? 'Start training round' : 'Start voted map';
 }
+
+addBotButton?.addEventListener('click', () => socket.emit('addBot'));
+playerList.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-remove-bot]');
+  if (button) socket.emit('removeBot', { botId: button.dataset.removeBot });
+});
 
 function queueLocalBombAnchor() {
   const local = displayPlayers.get(socket.id)
@@ -614,8 +624,8 @@ function renderHud() {
   scoreboard.innerHTML = sorted.map((p) => `
     <div class="score-row ${p.id === socket.id ? 'me' : ''}">
       <span class="score-color" style="background:${p.color}"></span>
-      <span class="${p.alive ? '' : 'dead-name'}">${escapeHtml(p.name)}</span>
-      <span class="score-latency">${latencyLabel(p.latencyMs)}</span>
+      <span class="${p.alive ? '' : 'dead-name'}">${escapeHtml(p.name)}${p.isBot ? ' · BOT' : ''}</span>
+      <span class="score-latency">${p.isBot ? 'AI' : latencyLabel(p.latencyMs)}</span>
       <span class="score-kills">${p.kills}K</span>
       <span class="score-points">${p.score}</span>
     </div>
@@ -660,7 +670,9 @@ function processEvents(events) {
       shake = Math.max(shake, 6);
       window.FFA3D?.triggerDeath(event);
       if (event.playerId === socket.id) {
-        showToast('You were blasted — movement resumes next round', '#ff8da0');
+        showToast(event.cause === 'overtime'
+          ? 'The overtime wall touched you'
+          : 'You were blasted — movement resumes next round', '#ff8da0');
         roundBanner.innerHTML = '<strong>ELIMINATED</strong><span>Spectating until the next round…</span>';
         roundBanner.classList.remove('hidden');
       }
@@ -1113,16 +1125,20 @@ function drawPowerups(layout) {
     const cx = ox + (item.x + .5) * tile;
     const cy = oy + (item.y + .5) * tile + Math.sin(animationTime * .006 + item.x) * tile * .05;
     ctx.save();
-    ctx.shadowColor = info.color;
-    ctx.shadowBlur = tile * .28;
+    ctx.shadowColor = 'rgba(0,0,0,.48)';
+    ctx.shadowBlur = tile * .16;
     ctx.beginPath();
     ctx.arc(cx, cy, tile * .27, 0, Math.PI * 2);
-    ctx.fillStyle = '#101425';
+    const metal = ctx.createRadialGradient(cx - tile * .08, cy - tile * .10, tile * .02, cx, cy, tile * .27);
+    metal.addColorStop(0, '#68717a');
+    metal.addColorStop(.22, '#30363d');
+    metal.addColorStop(1, '#111419');
+    ctx.fillStyle = metal;
     ctx.fill();
     ctx.strokeStyle = info.color;
     ctx.lineWidth = Math.max(2, tile * .045);
     ctx.stroke();
-    ctx.fillStyle = info.color;
+    ctx.fillStyle = '#f3f7fb';
     ctx.font = `900 ${Math.floor(tile * .28)}px system-ui`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -1149,13 +1165,13 @@ function drawBombs(layout) {
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
     const gradient = ctx.createRadialGradient(cx - radius * .32, cy - radius * .34, radius * .1, cx, cy, radius);
-    gradient.addColorStop(0, bomb.mega ? '#ff7d93' : '#9bdd4b');
-    gradient.addColorStop(.45, bomb.mega ? '#d92550' : '#4d9c32');
-    gradient.addColorStop(1, bomb.mega ? '#6d102a' : '#1c522a');
+    gradient.addColorStop(0, '#747b83');
+    gradient.addColorStop(.20, bomb.mega ? '#32343a' : '#292e34');
+    gradient.addColorStop(1, '#07090b');
     ctx.fillStyle = gradient;
     ctx.fill();
     ctx.clip();
-    ctx.strokeStyle = bomb.mega ? 'rgba(255,220,225,.38)' : 'rgba(195,245,114,.35)';
+    ctx.strokeStyle = bomb.mega ? 'rgba(222,55,82,.72)' : 'rgba(142,151,160,.28)';
     ctx.lineWidth = tile * .055;
     for (let stripe = -2; stripe <= 2; stripe += 1) {
       ctx.beginPath();
@@ -1257,17 +1273,26 @@ function drawPlayers(layout) {
     ctx.fill();
     ctx.shadowColor = 'transparent';
 
+    const movingX = player.moveX || 0;
+    const movingY = player.moveY || 0;
+    const facingX = Math.abs(movingX) + Math.abs(movingY) > .01 ? movingX : (player.facingX || 0);
+    const facingY = Math.abs(movingX) + Math.abs(movingY) > .01 ? movingY : (player.facingY || 1);
+    const turn = Math.atan2(facingX, facingY);
+    ctx.translate(cx, cy + bob);
+    ctx.rotate(-turn);
     ctx.fillStyle = '#192036';
-    const eyeY = cy + bob - radius * .1;
+    const eyeY = radius * .1;
     ctx.beginPath();
-    ctx.arc(cx - radius * .31, eyeY, radius * .1, 0, Math.PI * 2);
-    ctx.arc(cx + radius * .31, eyeY, radius * .1, 0, Math.PI * 2);
+    ctx.arc(-radius * .31, eyeY, radius * .1, 0, Math.PI * 2);
+    ctx.arc(radius * .31, eyeY, radius * .1, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = '#192036';
     ctx.lineWidth = Math.max(1.5, tile * .025);
     ctx.beginPath();
-    ctx.arc(cx, cy + bob + radius * .12, radius * .22, .2, Math.PI - .2);
+    ctx.arc(0, radius * .29, radius * .22, .2, Math.PI - .2);
     ctx.stroke();
+    ctx.rotate(turn);
+    ctx.translate(-cx, -(cy + bob));
 
     ctx.font = `800 ${Math.max(10, tile * .18)}px system-ui`;
     ctx.textAlign = 'center';

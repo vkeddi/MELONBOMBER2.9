@@ -31,6 +31,10 @@ const MAX_TICK_MOVEMENT = 0.32;
 const CORNER_ASSIST_MAX = 0.26;
 const CORNER_ASSIST_STEP = 0.055;
 const COLORS = ['#ff5d73', '#55d6be', '#ffd166', '#7aa2ff', '#c77dff', '#ff9f1c', '#80ed99', '#f15bb5'];
+const BOT_NAMES = ['Pip', 'Mango', 'Sprout', 'Kiwi', 'Peach', 'Berry', 'Lime', 'Plum'];
+const BOT_THINK_MIN_MS = 120;
+const BOT_THINK_MAX_MS = 230;
+const BOT_BOMB_COOLDOWN_MS = 1450;
 const MAPS = [
   { id: 'classic', name: 'Classic Grove', description: 'Balanced checkerboard pillars and familiar lanes.' },
   { id: 'crossroads', name: 'Crossroads', description: 'A broad central cross creates faster encounters.' },
@@ -78,6 +82,8 @@ const server = http.createServer((req, res) => {
       roundTimerMs: SUDDEN_DEATH_MS,
       mapVoteMs: MAP_VOTE_MS,
       mapCount: MAPS.length,
+      bots: true,
+      lethalOvertimeContact: true,
     }));
     return;
   }
@@ -173,6 +179,7 @@ function publicLobby(room) {
       score: p.score,
       connected: p.connected,
       latencyMs: p.latencyMs,
+      isBot: Boolean(p.isBot),
       mapVote: room.mapVotes.get(p.id) || null,
     })),
   };
@@ -196,12 +203,12 @@ function leaveCurrentRoom(socket) {
   }
 
   if (room.hostId === socket.id) {
-    room.hostId = room.players.keys().next().value || null;
+    room.hostId = [...room.players.values()].find((player) => !player.isBot)?.id || null;
   }
 
   socket.data.roomCode = null;
 
-  if (room.players.size === 0) {
+  if (![...room.players.values()].some((player) => !player.isBot)) {
     rooms.delete(room.code);
   } else {
     broadcastLobby(room);
@@ -218,6 +225,7 @@ function createRoom(socket, rawName) {
     score: 0,
     connected: true,
     latencyMs: null,
+    isBot: false,
   };
   const room = {
     code,
@@ -251,10 +259,45 @@ function joinRoom(socket, rawCode, rawName) {
     score: 0,
     connected: true,
     latencyMs: null,
+    isBot: false,
   };
   room.players.set(socket.id, player);
   socket.data.roomCode = code;
   broadcastLobby(room);
+}
+
+function addBot(room) {
+  if (!room || room.phase !== 'lobby' || room.players.size >= MAX_PLAYERS) return null;
+  const usedNames = new Set([...room.players.values()].map((player) => player.name));
+  const baseName = BOT_NAMES.find((name) => !usedNames.has(name)) || `Bot ${room.players.size + 1}`;
+  const id = `bot:${crypto.randomUUID()}`;
+  const player = {
+    id,
+    name: baseName,
+    color: COLORS[room.players.size % COLORS.length],
+    score: 0,
+    connected: true,
+    latencyMs: null,
+    isBot: true,
+  };
+  room.players.set(id, player);
+  room.inputs.set(id, { up: false, down: false, left: false, right: false });
+  room.mapVotes.set(id, MAPS[Math.floor(Math.random() * MAPS.length)].id);
+  broadcastLobby(room);
+  return player;
+}
+
+function removeBot(room, botId = null) {
+  if (!room || room.phase !== 'lobby') return false;
+  const bot = botId
+    ? room.players.get(botId)
+    : [...room.players.values()].reverse().find((player) => player.isBot);
+  if (!bot?.isBot) return false;
+  room.players.delete(bot.id);
+  room.inputs.delete(bot.id);
+  room.mapVotes.delete(bot.id);
+  broadcastLobby(room);
+  return true;
 }
 
 function idx(x, y) {
@@ -358,6 +401,7 @@ function createGame(room, mapId = room.selectedMapId || 'classic') {
       x: x + 0.5,
       y: y + 0.5,
       alive: true,
+      isBot: Boolean(p.isBot),
       speed: 3.4,
       maxBombs: 1,
       range: 1,
@@ -373,6 +417,12 @@ function createGame(room, mapId = room.selectedMapId || 'classic') {
       moveX: 0,
       moveY: 0,
       kills: 0,
+      botNextThinkAt: now + Math.random() * 300,
+      botNextBombAt: now + 900 + Math.random() * 1300,
+      botPath: [],
+      botEscapeUntil: 0,
+      botLastTile: `${x},${y}`,
+      botStuckSince: now,
     };
     room.inputs.set(p.id, { up: false, down: false, left: false, right: false });
   });
@@ -427,6 +477,9 @@ function beginMapVote(room, now) {
   if (room.players.size === 0) return;
   room.phase = 'mapVote';
   room.mapVotes.clear();
+  for (const player of room.players.values()) {
+    if (player.isBot) room.mapVotes.set(player.id, MAPS[Math.floor(Math.random() * MAPS.length)].id);
+  }
   room.mapVoteEndsAt = now + MAP_VOTE_MS;
   if (room.game) room.game.phase = 'mapVote';
   broadcastLobby(room);
@@ -594,10 +647,35 @@ function tryCornerAssist(game, player, amount, axis) {
   return true;
 }
 
+function touchesDeathBlock(game, x, y) {
+  const minX = Math.floor(x - PLAYER_RADIUS);
+  const maxX = Math.floor(x + PLAYER_RADIUS);
+  const minY = Math.floor(y - PLAYER_RADIUS);
+  const maxY = Math.floor(y + PLAYER_RADIUS);
+  for (let ty = minY; ty <= maxY; ty += 1) {
+    for (let tx = minX; tx <= maxX; tx += 1) {
+      if (getCell(game, tx, ty) === 3 && circleRectOverlap(x, y, PLAYER_RADIUS, tx, ty)) return true;
+    }
+  }
+  return false;
+}
+
+function eliminateByOvertime(game, player, now) {
+  if (!player.alive) return;
+  player.alive = false;
+  player.moveX = 0;
+  player.moveY = 0;
+  game.events.push({ type: 'death', playerId: player.id, killerId: null, cause: 'overtime', at: now });
+}
+
 function tryMoveAxis(game, player, amount, axis, now) {
   if (amount === 0) return false;
   const nx = axis === 'x' ? player.x + amount : player.x;
   const ny = axis === 'y' ? player.y + amount : player.y;
+  if (touchesDeathBlock(game, nx, ny)) {
+    eliminateByOvertime(game, player, now);
+    return false;
+  }
   if (canOccupy(game, nx, ny, player.id)) {
     player.x = nx;
     player.y = ny;
@@ -653,6 +731,192 @@ function movePlayer(room, player, input, dt, now) {
   }
 }
 
+function botTileOpen(game, x, y, playerId, allowStartBomb = false) {
+  if (!inBounds(x, y) || getCell(game, x, y) !== 0) return false;
+  const bomb = bombAt(game, x, y);
+  return !bomb || (allowStartBomb && bomb.passableFor.includes(playerId));
+}
+
+function addBombDanger(game, danger, bomb) {
+  danger.add(powerupKey(bomb.tx, bomb.ty));
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (let step = 1; step <= bomb.range; step += 1) {
+      const x = bomb.tx + dx * step;
+      const y = bomb.ty + dy * step;
+      const cell = getCell(game, x, y);
+      if (cell === 1 || cell === 3) break;
+      danger.add(powerupKey(x, y));
+      if (cell === 2 && !bomb.piercing) break;
+    }
+  }
+}
+
+function botDangerTiles(game, now) {
+  const danger = new Set();
+  for (const flame of game.flames) {
+    if (flame.until > now) danger.add(powerupKey(flame.x, flame.y));
+  }
+  // Bots plan around every active bomb, not only the ones about to explode.
+  // This gives them enough time to turn a corner before the fuse finishes.
+  for (const bomb of Object.values(game.bombs)) addBombDanger(game, danger, bomb);
+  return danger;
+}
+
+function reconstructBotPath(parent, targetKey) {
+  const path = [];
+  let cursor = targetKey;
+  while (cursor) {
+    const [x, y] = cursor.split(',').map(Number);
+    path.push([x, y]);
+    cursor = parent.get(cursor) || null;
+  }
+  return path.reverse();
+}
+
+function searchBotPath(game, player, goal, danger, options = {}) {
+  const startX = Math.floor(player.x);
+  const startY = Math.floor(player.y);
+  const startKey = powerupKey(startX, startY);
+  const queue = [[startX, startY]];
+  const parent = new Map([[startKey, null]]);
+  const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let cursor = 0;
+  while (cursor < queue.length && cursor < 220) {
+    const [x, y] = queue[cursor++];
+    const tileKey = powerupKey(x, y);
+    if ((x !== startX || y !== startY) && goal(x, y)) return reconstructBotPath(parent, tileKey);
+    for (const [dx, dy] of directions) {
+      const nx = x + dx;
+      const ny = y + dy;
+      const nextKey = powerupKey(nx, ny);
+      if (parent.has(nextKey)) continue;
+      if (!botTileOpen(game, nx, ny, player.id, options.allowStartBomb && x === startX && y === startY)) continue;
+      if (!options.allowDanger && danger.has(nextKey)) continue;
+      parent.set(nextKey, tileKey);
+      queue.push([nx, ny]);
+    }
+  }
+  return [];
+}
+
+function botThreatensTarget(game, player) {
+  const tx = Math.floor(player.x);
+  const ty = Math.floor(player.y);
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    if (getCell(game, tx + dx, ty + dy) === 2) return true;
+  }
+  for (const other of Object.values(game.players)) {
+    if (!other.alive || other.id === player.id) continue;
+    const ox = Math.floor(other.x);
+    const oy = Math.floor(other.y);
+    if (ox === tx && Math.abs(oy - ty) <= player.range) return true;
+    if (oy === ty && Math.abs(ox - tx) <= player.range) return true;
+  }
+  return false;
+}
+
+function botEscapePathForNewBomb(game, player, danger) {
+  const tx = Math.floor(player.x);
+  const ty = Math.floor(player.y);
+  const planned = new Set(danger);
+  addBombDanger(game, planned, {
+    tx,
+    ty,
+    range: player.range,
+    piercing: player.piercing,
+  });
+  return searchBotPath(
+    game,
+    player,
+    (x, y) => !planned.has(powerupKey(x, y)),
+    planned,
+    { allowStartBomb: true },
+  );
+}
+
+function chooseBotPath(game, player, danger) {
+  const currentKey = powerupKey(Math.floor(player.x), Math.floor(player.y));
+  if (danger.has(currentKey) || player.botEscapeUntil > Date.now()) {
+    return searchBotPath(game, player, (x, y) => !danger.has(powerupKey(x, y)), danger, { allowStartBomb: true });
+  }
+
+  const powerupTiles = new Set(Object.values(game.powerups).map((item) => powerupKey(item.x, item.y)));
+  if (powerupTiles.size) {
+    const path = searchBotPath(game, player, (x, y) => powerupTiles.has(powerupKey(x, y)), danger);
+    if (path.length) return path;
+  }
+
+  const enemies = Object.values(game.players).filter((other) => other.alive && other.id !== player.id);
+  const tacticalPath = searchBotPath(game, player, (x, y) => {
+    const besideCrate = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => getCell(game, x + dx, y + dy) === 2);
+    const nearEnemy = enemies.some((enemy) => Math.abs(Math.floor(enemy.x) - x) + Math.abs(Math.floor(enemy.y) - y) <= 2);
+    return besideCrate || nearEnemy;
+  }, danger);
+  if (tacticalPath.length) return tacticalPath;
+
+  const safeTiles = [];
+  for (let y = 1; y < ROWS - 1; y += 1) {
+    for (let x = 1; x < COLS - 1; x += 1) {
+      if (botTileOpen(game, x, y, player.id) && !danger.has(powerupKey(x, y))) safeTiles.push(powerupKey(x, y));
+    }
+  }
+  if (!safeTiles.length) return [];
+  const target = safeTiles[Math.floor(Math.random() * safeTiles.length)];
+  return searchBotPath(game, player, (x, y) => powerupKey(x, y) === target, danger);
+}
+
+function botInputTowardPath(player) {
+  while (player.botPath.length > 1) {
+    const [targetX, targetY] = player.botPath[1];
+    if (Math.hypot(player.x - (targetX + 0.5), player.y - (targetY + 0.5)) > 0.15) break;
+    player.botPath.shift();
+  }
+  const target = player.botPath[1];
+  if (!target) return { up: false, down: false, left: false, right: false };
+  const dx = target[0] + 0.5 - player.x;
+  const dy = target[1] + 0.5 - player.y;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    return { up: false, down: false, left: dx < 0, right: dx > 0 };
+  }
+  return { up: dy < 0, down: dy > 0, left: false, right: false };
+}
+
+function updateBotControllers(room, now) {
+  const game = room.game;
+  const danger = botDangerTiles(game, now);
+  for (const player of Object.values(game.players)) {
+    if (!player.isBot || !player.alive) continue;
+    const tileKey = powerupKey(Math.floor(player.x), Math.floor(player.y));
+    if (tileKey !== player.botLastTile) {
+      player.botLastTile = tileKey;
+      player.botStuckSince = now;
+    }
+
+    if (now >= player.botNextThinkAt || !player.botPath.length || now - player.botStuckSince > 1100) {
+      const canBomb = now >= player.botNextBombAt
+        && player.bombsPlaced < player.maxBombs
+        && !bombAt(game, Math.floor(player.x), Math.floor(player.y))
+        && !danger.has(tileKey)
+        && botThreatensTarget(game, player);
+      if (canBomb) {
+        const escapePath = botEscapePathForNewBomb(game, player, danger);
+        if (escapePath.length > 1) {
+          placeBomb(room, player.id, 'normal');
+          player.botPath = escapePath;
+          player.botEscapeUntil = now + BOMB_FUSE_MS + 250;
+          player.botNextBombAt = now + BOT_BOMB_COOLDOWN_MS + Math.random() * 900;
+        } else {
+          player.botPath = chooseBotPath(game, player, danger);
+        }
+      } else {
+        player.botPath = chooseBotPath(game, player, danger);
+      }
+      player.botNextThinkAt = now + BOT_THINK_MIN_MS + Math.random() * (BOT_THINK_MAX_MS - BOT_THINK_MIN_MS);
+    }
+    room.inputs.set(player.id, botInputTowardPath(player));
+  }
+}
+
 function clearBombPassability(game) {
   for (const bomb of Object.values(game.bombs)) {
     bomb.passableFor = bomb.passableFor.filter((playerId) => {
@@ -694,8 +958,8 @@ function placeSingleBomb(room, player, tx, ty, options = {}) {
     range: useMega ? Math.max(6, player.range + 3) : player.range,
     mega: useMega,
     piercing: player.piercing,
-    remote: player.remote,
-    explodeAt: player.remote ? null : placedAt + BOMB_FUSE_MS,
+    remote: player.remote && !player.isBot,
+    explodeAt: player.remote && !player.isBot ? null : placedAt + BOMB_FUSE_MS,
     passableFor: Object.values(game.players)
       .filter((p) => p.alive && Math.floor(p.x) === tx && Math.floor(p.y) === ty)
       .map((p) => p.id),
@@ -858,7 +1122,30 @@ function addDeathBlock(room, now) {
   if (bomb) explodeBomb(room, bomb.id, now);
   delete game.powerups[powerupKey(x, y)];
   for (const p of Object.values(game.players)) {
-    if (p.alive && Math.floor(p.x) === x && Math.floor(p.y) === y) p.alive = false;
+    if (!p.alive || !circleRectOverlap(p.x, p.y, PLAYER_RADIUS, x, y)) continue;
+    eliminateByOvertime(game, p, now);
+  }
+}
+
+function killPlayersTouchingDeathBlocks(room, now) {
+  const game = room.game;
+  for (const player of Object.values(game.players)) {
+    if (!player.alive) continue;
+    const minX = Math.floor(player.x - PLAYER_RADIUS);
+    const maxX = Math.floor(player.x + PLAYER_RADIUS);
+    const minY = Math.floor(player.y - PLAYER_RADIUS);
+    const maxY = Math.floor(player.y + PLAYER_RADIUS);
+    let touched = false;
+    for (let y = minY; y <= maxY && !touched; y += 1) {
+      for (let x = minX; x <= maxX; x += 1) {
+        if (getCell(game, x, y) === 3 && circleRectOverlap(player.x, player.y, PLAYER_RADIUS, x, y)) {
+          touched = true;
+          break;
+        }
+      }
+    }
+    if (!touched) continue;
+    eliminateByOvertime(game, player, now);
   }
 }
 
@@ -916,6 +1203,7 @@ function tickRoom(room, dt, now) {
   }
 
   moveKickedBombs(game, dt);
+  updateBotControllers(room, now);
   for (const [id, player] of Object.entries(game.players)) {
     if (!player.alive) continue;
     movePlayer(room, player, room.inputs.get(id) || {}, dt, now);
@@ -929,6 +1217,7 @@ function tickRoom(room, dt, now) {
   game.flames = game.flames.filter((f) => f.until > now);
   collectPowerups(game);
   killPlayersInFlames(room, now);
+  killPlayersTouchingDeathBlocks(room, now);
 
   if (now >= game.nextDeathBlockAt && game.suddenDeathQueue.length > 0) {
     addDeathBlock(room, now);
@@ -967,6 +1256,9 @@ function snapshot(room, now) {
       speed: p.speed,
       moveX: p.moveX || 0,
       moveY: p.moveY || 0,
+      facingX: p.facingX || 0,
+      facingY: p.facingY || 1,
+      isBot: Boolean(p.isBot),
       kick: p.kick,
       remote: p.remote,
       piercing: p.piercing,
@@ -1102,6 +1394,16 @@ function handleClientEvent(socket, event, data) {
     leaveCurrentRoom(socket);
     return;
   }
+  if (event === 'addBot') {
+    const room = getRoomForSocket(socket);
+    if (room && room.hostId === socket.id) addBot(room);
+    return;
+  }
+  if (event === 'removeBot') {
+    const room = getRoomForSocket(socket);
+    if (room && room.hostId === socket.id) removeBot(room, String(data.botId || ''));
+    return;
+  }
   if (event === 'latencyPong') {
     if (data.nonce && data.nonce === socket.data.pingNonce && socket.data.pingSentAt) {
       const sample = Math.max(0, Math.min(999, Date.now() - socket.data.pingSentAt));
@@ -1211,6 +1513,19 @@ function handleClientEvent(socket, event, data) {
       player.moveY = 0;
       for (let x = 4; x <= 8; x += 1) setCell(room.game, x, 5, 0);
       for (let y = 4; y <= 8; y += 1) setCell(room.game, 5, y, 0);
+      return;
+    }
+    if (TEST_MODE && data.type === 'testPrepareOvertimeTouch') {
+      const player = room.game?.players[socket.id];
+      if (!player?.alive) return;
+      room.game.bombs = {};
+      room.game.flames = [];
+      player.x = 5.5;
+      player.y = 5.5;
+      player.moveX = 0;
+      player.moveY = 0;
+      for (let x = 4; x <= 7; x += 1) setCell(room.game, x, 5, 0);
+      setCell(room.game, 6, 5, 3);
       return;
     }
     if (data.type === 'bomb') placeBomb(room, socket.id, 'normal');

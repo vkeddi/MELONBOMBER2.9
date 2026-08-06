@@ -1,3 +1,13 @@
+## Version 2.1.0 bots, presentation, and overtime update
+
+- Avatars now keep facing their last movement direction, including while idle.
+- Lobby hosts can add and remove server-authoritative bots up to the eight-player room limit.
+- Bots navigate toward crates, opponents, and upgrades, plan escape routes, place bombs, collect powerups, vote for maps, and score round wins.
+- The homepage now runs a lightweight AI arena match behind the menu with a dark readability scrim and high-contrast panels.
+- Overtime blocks are lethal on contact, including attempted movement into their collision edge and blocks spawning against a player.
+- Standard bombs now use black metal bodies, hardware caps, and fuses; mega bombs use a black shell with a red warning band.
+- Powerups use small modeled objects such as boots, remotes, drills, canisters, and miniature bombs instead of generic crystals.
+
 ## Version 2.0.4 version display update
 
 - Added a small version number that remains visible on the menu, lobby, and game screens.
@@ -17,7 +27,7 @@ The game now uses a locally bundled, dependency-free WebGL renderer with a fixed
 Highlights:
 
 - True perspective 3D overhead battlefield
-- Low-poly fruit characters with animated movement
+- Low-poly fruit characters with animated movement and directional facing
 - Lit stone walls, wooden crates, glowing pickups, and modeled bombs
 - Explosion shockwaves, debris particles, flame volumes, and death effects
 - Redesigned game HUD and in-world player labels
@@ -30,10 +40,10 @@ A standalone, original browser game inspired by classic grid-based bomb arena pa
 
 ## Included
 
-- Real online multiplayer using room codes (up to 8 players)
+- Real online multiplayer using room codes (up to 8 human players and host-added bots combined)
 - Server-authoritative movement, bomb placement, explosions, pickups, deaths, and scoring
 - Three original-size 15×13 arenas with a player vote before every round and true wall-layout previews
-- Destructible crate mazes with randomized powerups
+- Destructible crate mazes with randomized, physically modeled powerups
 - Chained explosions and self-elimination
 - Starting blast radius of 1; each blast pickup adds exactly one tile to only the collecting player
 - Speed, bomb-capacity, and special ability upgrades remain player-specific
@@ -128,7 +138,9 @@ fruit-fuse-arena/
 ├── public/
 │   ├── index.html     # Menu, lobby, canvas, and HUD
 │   ├── style.css      # Responsive visual design
-│   └── client.js      # Networking, controls, interpolation, and rendering
+│   ├── menu-demo.js   # Homepage AI background match
+│   ├── renderer3d.js  # Overhead WebGL renderer
+│   └── client.js      # Networking, controls, interpolation, and compatibility rendering
 ├── package.json
 └── Dockerfile
 ```
