@@ -104,6 +104,7 @@ let lastFrame = performance.now();
 let stateReceivedAt = performance.now();
 let hudDirty = false;
 let lastHudRender = 0;
+let rendererRuntimeFailed = false;
 const DISPLAY_RADIUS = 0.275;
 const DISPLAY_CORNER_ASSIST_MAX = 0.26;
 const DISPLAY_MOVE_SUBSTEP = 0.045;
@@ -383,6 +384,8 @@ socket.on('mapVoteStarted', () => {
 });
 
 socket.on('gameStarted', ({ round, mapName }) => {
+  rendererRuntimeFailed = false;
+  if (renderNotice && window.FFA3D?.available) renderNotice.classList.add('hidden');
   window.FFA3D?.resetRound();
   showScreen('game');
   mapVoteOverlay.classList.add('hidden');
@@ -1243,14 +1246,25 @@ function drawFrame(now) {
   }
 
   if (screens.game.classList.contains('active')) {
-    window.FFA3D?.render({
-      state,
-      displayPlayers,
-      displayBombs,
-      serverNow: estimatedServerNow(),
-      animationTime: now,
-      shake,
-    });
+    if (!rendererRuntimeFailed) {
+      try {
+        window.FFA3D?.render({
+          state,
+          displayPlayers,
+          displayBombs,
+          serverNow: estimatedServerNow(),
+          animationTime: now,
+          shake,
+        });
+      } catch (error) {
+        rendererRuntimeFailed = true;
+        console.error('3D renderer stopped during a frame:', error);
+        if (renderNotice) {
+          renderNotice.textContent = 'The 3D scene hit a rendering error. Refresh after updating to the latest build.';
+          renderNotice.classList.remove('hidden');
+        }
+      }
+    }
     if (shake > .05) shake *= .86;
     else shake = 0;
   }

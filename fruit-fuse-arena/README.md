@@ -1,3 +1,9 @@
+## Version 2.0.1 round-start fix
+
+- Fixed the blank/inactive arena that could appear when a round began in browsers using WebGL2.
+- Added separate GLSL shader variants for WebGL1 and WebGL2.
+- Added a renderer error guard so a graphics failure no longer silently stops the client animation loop.
+- Added a first-frame renderer test that exercises both WebGL versions before the multiplayer regression suite.
 
 ## Version 2.0 graphics overhaul
 
@@ -64,7 +70,7 @@ http://192.168.1.50:3000
 
 Your firewall must allow inbound TCP traffic on port 3000.
 
-Run the multiplayer integration and collision test with:
+Run the WebGL renderer compatibility test and multiplayer regression suite with:
 
 ```bash
 npm test

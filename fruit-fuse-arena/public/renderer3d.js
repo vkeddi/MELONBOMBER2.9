@@ -6,26 +6,10 @@
   const renderNotice = document.getElementById('renderNotice');
   if (!canvas) return;
 
-  const gl = canvas.getContext('webgl2', {
-    antialias: true,
-    alpha: false,
-    depth: true,
-    stencil: false,
-    powerPreference: 'high-performance',
-    preserveDrawingBuffer: false,
-  }) || canvas.getContext('webgl', {
-    antialias: true,
-    alpha: false,
-    depth: true,
-    stencil: false,
-    powerPreference: 'high-performance',
-    preserveDrawingBuffer: false,
-  });
-
-  if (!gl) {
+  function installRendererFallback(message) {
     if (renderNotice) {
       renderNotice.classList.remove('hidden');
-      renderNotice.textContent = 'This browser could not start the 3D renderer. Enable hardware acceleration or try a current Chrome, Edge, Firefox, or Safari browser.';
+      renderNotice.textContent = message;
     }
     window.FFA3D = {
       available: false,
@@ -36,10 +20,47 @@
       triggerDeath() {},
       resetRound() {},
     };
+  }
+
+  const contextOptions = {
+    antialias: true,
+    alpha: false,
+    depth: true,
+    stencil: false,
+    powerPreference: 'high-performance',
+    preserveDrawingBuffer: false,
+  };
+  const gl = canvas.getContext('webgl2', contextOptions)
+    || canvas.getContext('webgl', contextOptions)
+    || canvas.getContext('experimental-webgl', contextOptions);
+
+  if (!gl) {
+    installRendererFallback('This browser could not start the 3D renderer. Enable hardware acceleration or try a current Chrome, Edge, Firefox, or Safari browser.');
     return;
   }
 
-  const vertexShaderSource = `
+  const isWebGL2 = typeof WebGL2RenderingContext !== 'undefined'
+    && gl instanceof WebGL2RenderingContext;
+
+  // WebGL 2 only accepts GLSL ES 3.00 shaders, while WebGL 1 uses GLSL ES 1.00.
+  // The original 3D release always supplied the WebGL 1 syntax even after a
+  // WebGL 2 context was created, causing the first gameplay frame to fail on
+  // most current browsers. Keep equivalent shader variants for both contexts.
+  const vertexShaderSource = isWebGL2 ? `#version 300 es
+    in vec3 aPosition;
+    in vec3 aNormal;
+    uniform mat4 uModel;
+    uniform mat4 uViewProjection;
+    uniform mat3 uNormalMatrix;
+    out vec3 vNormal;
+    out vec3 vWorldPosition;
+    void main() {
+      vec4 world = uModel * vec4(aPosition, 1.0);
+      vWorldPosition = world.xyz;
+      vNormal = normalize(uNormalMatrix * aNormal);
+      gl_Position = uViewProjection * world;
+    }
+  ` : `
     attribute vec3 aPosition;
     attribute vec3 aNormal;
     uniform mat4 uModel;
@@ -55,8 +76,7 @@
     }
   `;
 
-  const fragmentShaderSource = `
-    precision mediump float;
+  const fragmentShaderBody = `
     uniform vec3 uColor;
     uniform vec3 uEmissive;
     uniform vec3 uCameraPosition;
@@ -66,8 +86,6 @@
     uniform float uUnlit;
     uniform float uFogDensity;
     uniform vec3 uFogColor;
-    varying vec3 vNormal;
-    varying vec3 vWorldPosition;
     void main() {
       vec3 normal = normalize(vNormal);
       vec3 lightDir = normalize(-uLightDirection);
@@ -81,9 +99,21 @@
       float distanceToCamera = length(uCameraPosition - vWorldPosition);
       float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * distanceToCamera * distanceToCamera);
       vec3 finalColor = mix(lit, uFogColor, clamp(fogFactor, 0.0, 0.78));
-      gl_FragColor = vec4(finalColor, uAlpha);
+      OUTPUT_COLOR = vec4(finalColor, uAlpha);
     }
   `;
+  const fragmentShaderSource = isWebGL2
+    ? `#version 300 es
+      precision mediump float;
+      in vec3 vNormal;
+      in vec3 vWorldPosition;
+      out vec4 outColor;
+${fragmentShaderBody.replace('OUTPUT_COLOR', 'outColor')}`
+    : `
+      precision mediump float;
+      varying vec3 vNormal;
+      varying vec3 vWorldPosition;
+${fragmentShaderBody.replace('OUTPUT_COLOR', 'gl_FragColor')}`;
 
   function compileShader(type, source) {
     const shader = gl.createShader(type);
@@ -113,10 +143,7 @@
     program = createProgram();
   } catch (error) {
     console.error(error);
-    if (renderNotice) {
-      renderNotice.classList.remove('hidden');
-      renderNotice.textContent = 'The 3D renderer failed to initialize. Refresh the page or enable hardware acceleration.';
-    }
+    installRendererFallback('The 3D renderer failed to initialize. Refresh the page or enable hardware acceleration.');
     return;
   }
 
